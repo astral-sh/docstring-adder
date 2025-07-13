@@ -1,0 +1,55 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_COLOR: 1 # Request colored output from CLI tools supporting it
+  CLICOLOR_FORCE: 1 # recognized by uv
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: docstring-adder
+          persist-credentials: false
+      - name: Checkout typeshed
+        run: git clone --depth=1 https://github.com/python/typeshed.git || git clone --depth=1 https://github.com/python/typeshed.git
+      - uses: astral-sh/setup-uv@v6
+      - name: Check a basic run doesn't fail
+        run: uvx --python=3.13 --from=./docstring-adder add-docstrings --stdlib-path ./typeshed/stdlib
+      - name: Check typeshed's mypy_test.py passes
+        run: |
+          cd typeshed
+          uv run --no-project --python=3.13 --with-requirements=requirements-tests.txt python tests/mypy_test.py stdlib -p3.13
+      - name: Check running it again doesn't produce any changes
+        run: |
+          cd typeshed
+          git config --global user.email "you@example.com"
+          git config --global user.name "Your Name"
+          git commit -am "."
+          uvx --python=3.13 --from=../docstring-adder add-docstrings --stdlib-path ./stdlib
+          test -z "$(git status --porcelain)"
+
+  mypy:
+    name: Run mypy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+      - run: uv run --with=mypy mypy
