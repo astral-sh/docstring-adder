@@ -256,13 +256,14 @@ def get_runtime_object_for_stub(
     runtime_parent: type | types.ModuleType, name: str
 ) -> Any:
     try:
-        try:
-            runtime = getattr(runtime_parent, name)
-        except AttributeError:
-            runtime = inspect.getattr_static(runtime_parent, name)
+        runtime = inspect.getattr_static(runtime_parent, name)
     # Some getattr() calls raise TypeError, or something even more exotic
     except Exception:
         return NOT_FOUND
+
+    # The docstrings from `collections.abc` are better than those from `typing`.
+    if isinstance(runtime, type(typing.Mapping)):
+        runtime = runtime.__origin__  # type: ignore[attr-defined]
 
     return runtime
 
@@ -293,10 +294,6 @@ def gather_documentable_objects(
 
     if not isinstance(node.ast, interesting_classes):
         return
-
-    # special-case some aliases in the typing module
-    if isinstance(runtime_parent, type(typing.Mapping)):
-        runtime_parent = runtime_parent.__origin__  # type: ignore[attr-defined]
 
     runtime = get_runtime_object_for_stub(runtime_parent, name)
     if runtime is NOT_FOUND:
@@ -370,7 +367,7 @@ def add_docstrings_to_stub(
         replacement_lines[0] = list(
             chain(
                 ['"""'],
-                runtime_module.__doc__.replace("\\", "\\\\").splitlines(),
+                runtime_module.__doc__.strip().replace("\\", "\\\\").splitlines(),
                 ['"""'],
             )
         )
