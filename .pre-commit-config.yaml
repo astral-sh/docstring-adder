@@ -1,0 +1,47 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-case-conflict
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.11.12
+    hooks:
+      - id: ruff
+      - id: ruff-format
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.4.1
+    hooks:
+      - id: codespell
+        language: python # means renovate will update the `additional_dependencies` for the hook
+        additional_dependencies: ["tomli"]
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.45.0
+    hooks:
+      - id: markdownlint-fix
+        args: ["--ignore", "stats_website/.snippets"]
+      - id: markdownlint
+        args: ["--ignore", "stats_website/.snippets"]
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v4.0.0-alpha.8
+    hooks:
+      - id: prettier
+        exclude_types: ["markdown"]
+  - repo: https://github.com/abravalheri/validate-pyproject
+    rev: v0.24.1
+    hooks:
+      - id: validate-pyproject
+  - repo: meta
+    hooks:
+      - id: check-hooks-apply
+
+ci:
+  autofix_commit_msg: "[pre-commit.ci] auto fixes from pre-commit.com hooks"
+  autofix_prs: true
+  autoupdate_commit_msg: "[pre-commit.ci] pre-commit autoupdate"
+  autoupdate_schedule: quarterly
+  submodules: false
