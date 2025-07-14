@@ -125,27 +125,26 @@ class DocstringAdder(libcst.CSTTransformer):
         return maybe_mangle_name(name=name, parent=self.runtime_parents[-1])
 
     def visit_ClassDef(self, node: libcst.ClassDef) -> None:
-        self.runtime_parents.append(
-            get_runtime_object_for_stub(
-                runtime_parent=self.runtime_parents[-1],
-                name=self.maybe_mangled_name(node.name.value),
-            )
+        runtime_object = get_runtime_object_for_stub(
+            runtime_parent=self.runtime_parents[-1],
+            name=self.maybe_mangled_name(node.name.value),
         )
+        if runtime_object is NOT_FOUND:
+            self.log_runtime_object_not_found(node.name.value)
+        self.runtime_parents.append(runtime_object)
 
     def leave_ClassDef(
-        self,
-        original_node: libcst.ClassDef,  # noqa: ARG002
-        updated_node: libcst.ClassDef,
+        self, original_node: libcst.ClassDef, updated_node: libcst.ClassDef
     ) -> libcst.ClassDef:
-        runtime_object = self.runtime_parents.pop()
-
-        if runtime_object is NOT_FOUND:
-            self.log_runtime_object_not_found(updated_node.name.value)
-            return updated_node
-
-        return add_docstring_to_libcst_node(
-            updated_node=updated_node, runtime_object=runtime_object, level=self.level
-        )
+        runtime_class = self.runtime_parents.pop()
+        if runtime_class is NOT_FOUND:
+            return original_node
+        else:
+            return add_docstring_to_libcst_node(
+                updated_node=updated_node,
+                runtime_object=runtime_class,
+                level=self.level,
+            )
 
     def log_runtime_object_not_found(self, name: str) -> None:
         parent_fullname = ".".join(parent.__name__ for parent in self.runtime_parents)
@@ -153,17 +152,18 @@ class DocstringAdder(libcst.CSTTransformer):
         log(f"Could not find {parent_fullname}.{mangled_name} at runtime")
 
     def leave_FunctionDef(
-        self,
-        original_node: libcst.FunctionDef,  # noqa: ARG002
-        updated_node: libcst.FunctionDef,
+        self, original_node: libcst.FunctionDef, updated_node: libcst.FunctionDef
     ) -> libcst.FunctionDef:
+        runtime_parent = self.runtime_parents[-1]
+        if runtime_parent is NOT_FOUND:
+            return original_node
         runtime_object = get_runtime_object_for_stub(
-            runtime_parent=self.runtime_parents[-1],
+            runtime_parent=runtime_parent,
             name=self.maybe_mangled_name(updated_node.name.value),
         )
         if runtime_object is NOT_FOUND:
             self.log_runtime_object_not_found(updated_node.name.value)
-            return updated_node
+            return original_node
         return add_docstring_to_libcst_node(
             updated_node=updated_node, runtime_object=runtime_object, level=self.level
         )
@@ -265,7 +265,11 @@ def get_runtime_object_for_stub(
         runtime = inspect.unwrap(inspect.getattr_static(runtime_parent, name))
         # `inspect.unwrap()` doesn't do a great job for staticmethod/classmethod on Python 3.9,
         # because the `__wrapped__` attribute was added for these objects in Python 3.10.
-        if hasattr(runtime, "__func__"):
+        if (
+            sys.version_info < (3, 10)
+            and not isinstance(runtime, type)
+            and hasattr(runtime, "__func__")
+        ):
             runtime = runtime.__func__
     # Some getattr() calls raise TypeError, or something even more exotic
     except Exception:
@@ -313,13 +317,18 @@ def gather_documentable_objects(
                 name=child_name, parent=runtime_parent
             )
 
-            yield from gather_documentable_objects(
-                node=child_node,
-                name=maybe_mangled_child_name,
-                fullname=f"{fullname}.{child_name}",
-                runtime_parent=get_runtime_object_for_stub(runtime_parent, name),
-                blacklisted_objects=blacklisted_objects,
-            )
+            runtime_object = get_runtime_object_for_stub(runtime_parent, name)
+
+            if runtime_object is NOT_FOUND:
+                log(f"Could not find {fullname} at runtime")
+            else:
+                yield from gather_documentable_objects(
+                    node=child_node,
+                    name=maybe_mangled_child_name,
+                    fullname=f"{fullname}.{child_name}",
+                    runtime_parent=runtime_object,
+                    blacklisted_objects=blacklisted_objects,
+                )
 
         return
 
