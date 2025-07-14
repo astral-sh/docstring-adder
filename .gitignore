@@ -67,7 +67,6 @@ analyze.py
 .venv*/
 venv/
 env/
-uv.lock
 
 # Mypy cache
 .mypy_cache/
