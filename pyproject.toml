@@ -15,6 +15,8 @@ dependencies = [
     "termcolor>=3.1.0",
     "tomli>=2.2.1",
     "typeshed-client>=2.7.0",
+    # So that we can add docs for `typing_extensions` APIs:
+    "typing_extensions",
 ]
 keywords = ["typing", "stubs"]
 classifiers = [

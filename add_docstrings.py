@@ -147,7 +147,9 @@ class DocstringAdder(libcst.CSTTransformer):
             )
 
     def log_runtime_object_not_found(self, name: str) -> None:
-        parent_fullname = ".".join(parent.__name__ for parent in self.runtime_parents)
+        parent_fullname = ".".join(
+            getattr(parent, "__name__", "<unknown>") for parent in self.runtime_parents
+        )
         mangled_name = self.maybe_mangled_name(name)
         log(f"Could not find {parent_fullname}.{mangled_name} at runtime")
 
@@ -261,6 +263,16 @@ class NOT_FOUND: ...
 def get_runtime_object_for_stub(
     runtime_parent: type | types.ModuleType | types.FunctionType, name: str
 ) -> Any:
+    # Some `sys`-module APIs are weird.
+    if runtime_parent is sys and name in {
+        "_float_info",
+        "_flags",
+        "_int_info",
+        "_hash_info",
+        "_thread_info",
+        "_version_info",
+    }:
+        name = name[1:]
     try:
         runtime = inspect.unwrap(inspect.getattr_static(runtime_parent, name))
         # `inspect.unwrap()` doesn't do a great job for staticmethod/classmethod on Python 3.9,
@@ -470,7 +482,14 @@ def install_typeshed_packages(typeshed_paths: Sequence[Path]) -> None:
 # * `_typeshed` doesn't exist at runtime; no point trying to add docstrings to it
 # * `antigravity` exists at runtime but it's annoying to have the browser open up every time
 # * `__main__` exists at runtime but will just reflect details of how docstring-adder itself was run.
-STDLIB_MODULE_BLACKLIST = ("_typeshed/*.pyi", "antigravity.pyi", "__main__.pyi")
+# * `sys._monitoring` exists as `sys.monitoring` at runtime, but none of the APIs in that module
+#   have docstrings, so no point trying to add them.
+STDLIB_MODULE_BLACKLIST = (
+    "_typeshed/*.pyi",
+    "antigravity.pyi",
+    "__main__.pyi",
+    "sys/_monitoring.pyi",
+)
 
 
 def load_blacklist(path: Path) -> frozenset[str]:
