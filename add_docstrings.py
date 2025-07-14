@@ -182,7 +182,8 @@ class DocstringAdder(libcst.CSTTransformer):
                 body.append(updated)
                 continue
             # If there are multiple functions with the same name in an indented block,
-            # it's probably an overloaded function. Only add a docstring for the first definition.
+            # it's probably an overloaded function or the `@setter` for a property.
+            # Only add a docstring for the first definition.
             if updated.name.value in seen:
                 body.append(original)
                 continue
