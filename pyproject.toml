@@ -9,7 +9,7 @@ authors = [{ name = "Alex Waygood", email = "alex.waygood@gmail.com" }]
 description = "Tool to add docstrings to stubs."
 readme = "README.md"
 license = { text = "MIT" }
-requires-python = ">=3.13"
+requires-python = ">=3.9"
 dependencies = [
     "libcst>=1.8.2",
     "termcolor>=3.1.0",
@@ -48,6 +48,7 @@ enable_error_code = 'ignore-without-code,redundant-expr,possibly-undefined'
 warn_unreachable = true
 local_partial_types = true
 allow_redefinition = true
+python_version = "3.9"
 
 [tool.ruff]
 fix = true

@@ -18,7 +18,7 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, TypeVar
 
 import libcst
 import tomli
@@ -38,28 +38,26 @@ def get_end_lineno(node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) 
 class DocumentableObject(NamedTuple):
     """An object in a stub that could have a docstring added to it."""
 
-    fullname: str
     stub_ast: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
-    runtime_object: Any
+    runtime_parent: type | types.ModuleType
 
 
-def add_docstring_to_libcst_node[T: (libcst.ClassDef, libcst.FunctionDef)](
-    original_node: T,
-    updated_node: T,
-    object_to_codemod: libcst.ClassDef | libcst.FunctionDef,
-    runtime_object: Any,
-    *,
-    level: int,
-) -> tuple[T, bool]:
-    if original_node is not object_to_codemod:
-        return updated_node, False
+T = TypeVar("T", libcst.ClassDef, libcst.FunctionDef)
 
+
+def clean_docstring(docstring: str) -> str:
+    return docstring.strip().replace("\\", "\\\\")
+
+
+def add_docstring_to_libcst_node(
+    updated_node: T, runtime_object: Any, *, level: int
+) -> T:
     if updated_node.get_docstring() is not None:
-        return updated_node, False
+        return updated_node
 
     docstring = get_runtime_docstring(runtime=runtime_object)
     if docstring is None:
-        return updated_node, False
+        return updated_node
 
     # E.g. we want to avoid a bajillion `__init__` docstrings that are just
     #
@@ -76,32 +74,34 @@ def add_docstring_to_libcst_node[T: (libcst.ClassDef, libcst.FunctionDef)](
             runtime=object.__dict__[updated_node.name.value]
         )
         if docstring == method_docstring_on_object:
-            return updated_node, False
+            return updated_node
 
     indentation = " " * 4 * level
-    indented_docstring = f'"""\n{textwrap.indent(docstring.strip().replace("\\", "\\\\"), indentation)}\n{indentation}"""'
+    indented_docstring = f'"""\n{textwrap.indent(clean_docstring(docstring), indentation)}\n{indentation}"""'
     docstring_node = libcst.Expr(libcst.SimpleString(indented_docstring))
 
-    match updated_node.body:
-        # If the body is just a `...`, replace it with just the docstring.
-        case libcst.SimpleStatementSuite(body=[libcst.Expr(value=libcst.Ellipsis())]):
-            new_body = libcst.IndentedBlock(
-                body=[libcst.SimpleStatementLine(body=[docstring_node])],
-                # but preserve `# type: ignore` comments
-                header=updated_node.body.trailing_whitespace,
-            )
-
-        case libcst.IndentedBlock(
-            body=[
-                libcst.SimpleStatementLine(body=[libcst.Expr(value=libcst.Ellipsis())])
-            ]
+    # If the body is just a `...`, replace it with just the docstring.
+    if (
+        isinstance(updated_node.body, libcst.SimpleStatementSuite)
+        and len(updated_node.body.body) == 1
+        and isinstance(updated_node.body.body[0], libcst.Expr)
+        and isinstance(updated_node.body.body[0].value, libcst.Ellipsis)
+    ):
+        new_body = libcst.IndentedBlock(
+            body=[libcst.SimpleStatementLine(body=[docstring_node])],
+            # but preserve `# type: ignore` comments
+            header=updated_node.body.trailing_whitespace,
+        )
+    elif isinstance(updated_node.body, libcst.IndentedBlock):
+        if (
+            len(updated_node.body.body) == 1
+            and isinstance(updated_node.body.body[0], libcst.Expr)
+            and isinstance(updated_node.body.body[0].value, libcst.Ellipsis)
         ):
             new_body = updated_node.body.with_changes(
                 body=[libcst.SimpleStatementLine(body=[docstring_node])]
             )
-
-        # Otherwise, add the docstring to the top of the suite
-        case libcst.IndentedBlock():
+        else:
             new_body = updated_node.body.with_changes(
                 body=list(
                     chain(
@@ -110,101 +110,99 @@ def add_docstring_to_libcst_node[T: (libcst.ClassDef, libcst.FunctionDef)](
                     )
                 )
             )
+    else:
+        return updated_node
 
-        case _:
-            return updated_node, False
-
-    return updated_node.with_changes(body=new_body), True
+    return updated_node.with_changes(body=new_body)
 
 
-@dataclass(kw_only=True)
+@dataclass
 class DocstringAdder(libcst.CSTTransformer):
-    fullname: str
-    object_to_codemod: libcst.ClassDef | libcst.FunctionDef
-    runtime_object: Any
+    runtime_parents: list[types.ModuleType | type | types.FunctionType]
     level: int
-    added_docstrings: int = 0
+
+    def maybe_mangled_name(self, name: str) -> str:
+        return maybe_mangle_name(name=name, parent=self.runtime_parents[-1])
+
+    def visit_ClassDef(self, node: libcst.ClassDef) -> None:
+        self.runtime_parents.append(
+            get_runtime_object_for_stub(
+                runtime_parent=self.runtime_parents[-1],
+                name=self.maybe_mangled_name(node.name.value),
+            )
+        )
 
     def leave_ClassDef(
-        self, original_node: libcst.ClassDef, updated_node: libcst.ClassDef
+        self,
+        original_node: libcst.ClassDef,  # noqa: ARG002
+        updated_node: libcst.ClassDef,
     ) -> libcst.ClassDef:
-        """Add a docstring to a class definition."""
+        runtime_object = self.runtime_parents.pop()
 
-        transformed_node, added = add_docstring_to_libcst_node(
-            original_node=original_node,
-            updated_node=updated_node,
-            object_to_codemod=self.object_to_codemod,
-            runtime_object=self.runtime_object,
-            level=self.level,
-        )
-        self.added_docstrings += added
+        if runtime_object is NOT_FOUND:
+            self.log_runtime_object_not_found(updated_node.name.value)
+            return updated_node
 
-        body: list[libcst.BaseStatement | libcst.BaseSmallStatement] = []
-        seen_children: set[str] = set()
-
-        for item in transformed_node.body.body:
-            if not isinstance(item, (libcst.ClassDef, libcst.FunctionDef)):
-                body.append(item)
-                continue
-
-            # For overloaded methods, only add the docstring to the first overload
-            if (
-                isinstance(item, libcst.FunctionDef)
-                and item.name.value in seen_children
-            ):
-                body.append(item)
-                continue
-
-            seen_children.add(item.name.value)
-            maybe_mangled_child_name = maybe_mangle_name(item.name.value, self.fullname)
-            runtime = get_runtime_object_for_stub(
-                runtime_parent=self.runtime_object, name=maybe_mangled_child_name
-            )
-            if runtime is NOT_FOUND:
-                log(
-                    f"Could not find {self.fullname}.{maybe_mangled_child_name} at runtime"
-                )
-                body.append(item)
-                continue
-            visitor = DocstringAdder(
-                fullname=f"{self.fullname}.{maybe_mangled_child_name}",
-                object_to_codemod=item,
-                runtime_object=runtime,
-                level=self.level + 1,
-            )
-            transformed_item = item.visit(visitor)
-            self.added_docstrings += visitor.added_docstrings
-            assert isinstance(transformed_item, type(item))
-            assert isinstance(transformed_item, (libcst.ClassDef, libcst.FunctionDef))
-            body.append(transformed_item)
-
-        transformed_node = transformed_node.with_changes(
-            body=transformed_node.body.with_changes(body=body)
+        return add_docstring_to_libcst_node(
+            updated_node=updated_node, runtime_object=runtime_object, level=self.level
         )
 
-        return transformed_node
+    def log_runtime_object_not_found(self, name: str) -> None:
+        parent_fullname = ".".join(parent.__name__ for parent in self.runtime_parents)
+        mangled_name = self.maybe_mangled_name(name)
+        log(f"Could not find {parent_fullname}.{mangled_name} at runtime")
 
     def leave_FunctionDef(
-        self, original_node: libcst.FunctionDef, updated_node: libcst.FunctionDef
+        self,
+        original_node: libcst.FunctionDef,  # noqa: ARG002
+        updated_node: libcst.FunctionDef,
     ) -> libcst.FunctionDef:
-        """Add a docstring to a function definition."""
-
-        transformed_node, added = add_docstring_to_libcst_node(
-            original_node=original_node,
-            updated_node=updated_node,
-            object_to_codemod=self.object_to_codemod,
-            runtime_object=self.runtime_object,
-            level=self.level,
+        runtime_object = get_runtime_object_for_stub(
+            runtime_parent=self.runtime_parents[-1],
+            name=self.maybe_mangled_name(updated_node.name.value),
         )
-        self.added_docstrings += added
-        return transformed_node
+        if runtime_object is NOT_FOUND:
+            self.log_runtime_object_not_found(updated_node.name.value)
+            return updated_node
+        return add_docstring_to_libcst_node(
+            updated_node=updated_node, runtime_object=runtime_object, level=self.level
+        )
+
+    def visit_IndentedBlock(self, node: libcst.IndentedBlock) -> None:  # noqa: ARG002
+        self.level += 1
+
+    def leave_IndentedBlock(
+        self, original_node: libcst.IndentedBlock, updated_node: libcst.IndentedBlock
+    ) -> libcst.IndentedBlock:
+        body: list[libcst.BaseStatement] = []
+        seen: set[str] = set()
+
+        for original, updated in zip(original_node.body, updated_node.body):
+            if not isinstance(updated, libcst.FunctionDef):
+                body.append(updated)
+                continue
+            # If there are multiple functions with the same name in an indented block,
+            # it's probably an overloaded function. Only add a docstring for the first definition.
+            if updated.name.value in seen:
+                body.append(original)
+                continue
+            seen.add(updated.name.value)
+            body.append(updated)
+
+        self.level -= 1
+        return updated_node.with_changes(body=body)
 
 
-@dataclass(kw_only=True)
-class FunctionDocstringAdder(libcst.CSTTransformer):
-    function_to_codemod: libcst.Name
-    runtime_docstring: str
-    added_docstring: bool = False
+def maybe_mangle_name(
+    *, name: str, parent: type | types.ModuleType | types.FunctionType
+) -> str:
+    if not isinstance(parent, type):
+        return name
+
+    if name.startswith("__") and not name.endswith("__"):
+        return f"_{parent.__name__.lstrip('_')}{name}"
+
+    return name
 
 
 def get_runtime_docstring(runtime: Any) -> str | None:
@@ -218,10 +216,19 @@ def get_runtime_docstring(runtime: Any) -> str | None:
     if not isinstance(runtime_docstring, str):
         return None
 
+    if runtime is not staticmethod:
+        assert runtime_docstring != staticmethod.__doc__, runtime
+
+    if runtime is not classmethod:
+        assert runtime_docstring != classmethod.__doc__, runtime
+
+    if runtime is not property:
+        assert runtime_docstring != property.__doc__, runtime
+
     return inspect.cleandoc(runtime_docstring)
 
 
-def add_docstring_to_stub_object(
+def add_docstring_to_module_level_stub_object(
     stub_lines: list[str], documentable_object: DocumentableObject
 ) -> dict[int, list[str]]:
     start_lineno = documentable_object.stub_ast.lineno - 1
@@ -233,11 +240,9 @@ def add_docstring_to_stub_object(
         return {}
 
     visitor = DocstringAdder(
-        object_to_codemod=cst,
-        fullname=documentable_object.fullname,
-        runtime_object=documentable_object.runtime_object,
-        level=1,
+        runtime_parents=[documentable_object.runtime_parent], level=1
     )
+
     modified = cst.visit(visitor)
     assert isinstance(modified, type(cst))
     assert isinstance(modified, (libcst.FunctionDef, libcst.ClassDef))
@@ -253,10 +258,14 @@ class NOT_FOUND: ...
 
 
 def get_runtime_object_for_stub(
-    runtime_parent: type | types.ModuleType, name: str
+    runtime_parent: type | types.ModuleType | types.FunctionType, name: str
 ) -> Any:
     try:
-        runtime = inspect.getattr_static(runtime_parent, name)
+        runtime = inspect.unwrap(inspect.getattr_static(runtime_parent, name))
+        # `inspect.unwrap()` doesn't do a great job for staticmethod/classmethod on Python 3.9,
+        # because the `__wrapped__` attribute was added for these objects in Python 3.10.
+        if hasattr(runtime, "__func__"):
+            runtime = runtime.__func__
     # Some getattr() calls raise TypeError, or something even more exotic
     except Exception:
         return NOT_FOUND
@@ -266,14 +275,6 @@ def get_runtime_object_for_stub(
         runtime = runtime.__origin__  # type: ignore[attr-defined]
 
     return runtime
-
-
-def maybe_mangle_name(name: str, parent_fullname: str) -> str:
-    if name.startswith("__") and not name.endswith("__"):
-        unmangled_parent_name = parent_fullname.split(".")[-1]
-        return f"_{unmangled_parent_name.lstrip('_')}{name}"
-
-    return name
 
 
 def gather_documentable_objects(
@@ -295,16 +296,11 @@ def gather_documentable_objects(
     if not isinstance(node.ast, interesting_classes):
         return
 
-    runtime = get_runtime_object_for_stub(runtime_parent, name)
-    if runtime is NOT_FOUND:
-        log("Could not find", fullname, "at runtime")
-        return
-
     if isinstance(node.ast, ast.ClassDef):
         if fullname in blacklisted_objects:
             log(f"Skipping {fullname}: blacklisted object")
         else:
-            yield DocumentableObject(fullname, node.ast, runtime)
+            yield DocumentableObject(node.ast, runtime_parent)
             return
 
         # Only recurse into the class if the class itself is blacklisted;
@@ -312,13 +308,15 @@ def gather_documentable_objects(
         child_nodes = node.child_nodes or {}
 
         for child_name, child_node in child_nodes.items():
-            maybe_mangled_child_name = maybe_mangle_name(child_name, fullname)
+            maybe_mangled_child_name = maybe_mangle_name(
+                name=child_name, parent=runtime_parent
+            )
 
             yield from gather_documentable_objects(
                 node=child_node,
                 name=maybe_mangled_child_name,
                 fullname=f"{fullname}.{child_name}",
-                runtime_parent=runtime,
+                runtime_parent=get_runtime_object_for_stub(runtime_parent, name),
                 blacklisted_objects=blacklisted_objects,
             )
 
@@ -330,9 +328,9 @@ def gather_documentable_objects(
 
     if isinstance(node.ast, typeshed_client.OverloadedName):
         if isinstance(node.ast.definitions[0], (ast.FunctionDef, ast.AsyncFunctionDef)):
-            yield DocumentableObject(fullname, node.ast.definitions[0], runtime)
+            yield DocumentableObject(node.ast.definitions[0], runtime_parent)
     else:
-        yield DocumentableObject(fullname, node.ast, runtime)
+        yield DocumentableObject(node.ast, runtime_parent)
 
 
 def add_docstrings_to_stub(
@@ -366,9 +364,7 @@ def add_docstrings_to_stub(
     if runtime_module.__doc__ and parsed_module.get_docstring() is None:
         replacement_lines[0] = list(
             chain(
-                ['"""'],
-                runtime_module.__doc__.strip().replace("\\", "\\\\").splitlines(),
-                ['"""'],
+                ['"""'], clean_docstring(runtime_module.__doc__).splitlines(), ['"""']
             )
         )
         if stub_lines:
@@ -377,8 +373,6 @@ def add_docstrings_to_stub(
     stub_names = typeshed_client.get_stub_names(module_name, search_context=context)
     if stub_names is None:
         raise ValueError(f"Could not find stub for {module_name}")
-
-    original_objects: list[str | None] = []
 
     for name, info in stub_names.items():
         objects = gather_documentable_objects(
@@ -390,10 +384,9 @@ def add_docstrings_to_stub(
         )
 
         for documentable_object in objects:
-            original_objects.append(
-                getattr(documentable_object.runtime_object, "__name__", None)
+            new_lines = add_docstring_to_module_level_stub_object(
+                stub_lines, documentable_object
             )
-            new_lines = add_docstring_to_stub_object(stub_lines, documentable_object)
             replacement_lines.update(new_lines)
 
     new_module = ""
