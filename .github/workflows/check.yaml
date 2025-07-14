@@ -36,7 +36,7 @@ jobs:
       - name: Check a basic run doesn't fail
         run: uvx --python=${{ matrix.python-version }} --force-reinstall --from=./docstring-adder add-docstrings --stdlib-path ./typeshed/stdlib
       - name: Check typeshed's mypy_test.py passes
-        run: uv run --directory=typeshed --no-project --python=3.13 --with-requirements=requirements-tests.txt python tests/mypy_test.py stdlib -p3.13
+        run: uv run --directory=typeshed --no-project --python=3.13 --with-requirements=requirements-tests.txt python tests/mypy_test.py stdlib -p "${{ matrix.python-version }}"
       - name: Check running it again doesn't produce any changes
         # Some weird thing with distutils means that it does actually add docstrings
         # when run the second time that it didn't add when run the first time.
