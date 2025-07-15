@@ -46,7 +46,7 @@ T = TypeVar("T", libcst.ClassDef, libcst.FunctionDef)
 
 
 def clean_docstring(docstring: str) -> str:
-    return docstring.strip().replace("\\", "\\\\")
+    return docstring.rstrip().replace("\\", "\\\\")
 
 
 def add_docstring_to_libcst_node(
@@ -77,7 +77,23 @@ def add_docstring_to_libcst_node(
             return updated_node
 
     indentation = " " * 4 * level
-    indented_docstring = f'"""\n{textwrap.indent(clean_docstring(docstring), indentation)}\n{indentation}"""'
+
+    # For a single-line docstring, this can result in funny things like:
+    #
+    # ```py
+    # def foo():
+    #     """A docstring.
+    #     """
+    # ```
+    #
+    # But we don't need to worry about that here: Black sorts that out for us and turns it into:
+    #
+    # ```py
+    # def foo():
+    #     """A docstring."""
+    # ```
+    indented_docstring = f'"""{textwrap.indent(clean_docstring(docstring), indentation).lstrip(" ")}\n{indentation}"""'
+
     docstring_node = libcst.Expr(libcst.SimpleString(indented_docstring))
 
     # If the body is just a `...`, replace it with just the docstring.
