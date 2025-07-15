@@ -394,7 +394,7 @@ def add_docstrings_to_stub(
         log(f'Could not import {module_name}: {type(e).__name__}: "{e}"')
         return
 
-    stub_source = path.read_text()
+    stub_source = path.read_text(encoding="utf-8")
     parsed_module = libcst.parse_module(stub_source)
     stub_lines = stub_source.splitlines()
     replacement_lines: dict[int, list[str]] = {}
@@ -434,7 +434,7 @@ def add_docstrings_to_stub(
                 new_module += f"{new_line}\n"
         else:
             new_module += f"{line}\n"
-    path.write_text(new_module)
+    path.write_text(new_module, encoding="utf-8")
 
     check_no_destructive_changes(
         path=path, previous_stub=stub_source, new_stub=new_module
@@ -481,7 +481,7 @@ def install_typeshed_packages(typeshed_paths: Sequence[Path]) -> None:
         if not metadata_path.exists():
             print(f"{path} does not look like a typeshed package", file=sys.stderr)
             sys.exit(1)
-        metadata_bytes = metadata_path.read_text()
+        metadata_bytes = metadata_path.read_text(encoding="utf-8")
         metadata = tomli.loads(metadata_bytes)
         version = metadata["version"]
         to_install.append(f"{path.name}=={version}")
