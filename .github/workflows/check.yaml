@@ -11,7 +11,6 @@ permissions:
 env:
   FORCE_COLOR: 1 # Request colored output from CLI tools supporting it
   CLICOLOR_FORCE: 1 # recognized by uv
-  PYTHONUTF8: 1
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 concurrency:
