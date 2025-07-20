@@ -39,7 +39,7 @@ class DocumentableObject(NamedTuple):
     """An object in a stub that could have a docstring added to it."""
 
     stub_ast: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
-    runtime_parent: type | types.ModuleType
+    runtime_parent: RuntimeParent
 
 
 T = TypeVar("T", libcst.ClassDef, libcst.FunctionDef)
@@ -132,9 +132,14 @@ def add_docstring_to_libcst_node(
     return updated_node.with_changes(body=new_body)
 
 
+class RuntimeParent(NamedTuple):
+    name: str
+    value: type | types.ModuleType | types.FunctionType
+
+
 @dataclass
 class DocstringAdder(libcst.CSTTransformer):
-    runtime_parents: list[types.ModuleType | type | types.FunctionType]
+    runtime_parents: list[RuntimeParent]
     level: int
 
     def maybe_mangled_name(self, name: str) -> str:
@@ -147,12 +152,14 @@ class DocstringAdder(libcst.CSTTransformer):
         )
         if runtime_object is NOT_FOUND:
             self.log_runtime_object_not_found(node.name.value)
-        self.runtime_parents.append(runtime_object)
+        self.runtime_parents.append(
+            RuntimeParent(name=node.name.value, value=runtime_object)
+        )
 
     def leave_ClassDef(
         self, original_node: libcst.ClassDef, updated_node: libcst.ClassDef
     ) -> libcst.ClassDef:
-        runtime_class = self.runtime_parents.pop()
+        runtime_class = self.runtime_parents.pop().value
         if runtime_class is NOT_FOUND:
             return original_node
         else:
@@ -163,9 +170,7 @@ class DocstringAdder(libcst.CSTTransformer):
             )
 
     def log_runtime_object_not_found(self, name: str) -> None:
-        parent_fullname = ".".join(
-            getattr(parent, "__name__", "<unknown>") for parent in self.runtime_parents
-        )
+        parent_fullname = ".".join(parent.name for parent in self.runtime_parents)
         mangled_name = self.maybe_mangled_name(name)
         log(f"Could not find {parent_fullname}.{mangled_name} at runtime")
 
@@ -173,7 +178,7 @@ class DocstringAdder(libcst.CSTTransformer):
         self, original_node: libcst.FunctionDef, updated_node: libcst.FunctionDef
     ) -> libcst.FunctionDef:
         runtime_parent = self.runtime_parents[-1]
-        if runtime_parent is NOT_FOUND:
+        if runtime_parent.value is NOT_FOUND:
             return original_node
         runtime_object = get_runtime_object_for_stub(
             runtime_parent=runtime_parent,
@@ -212,14 +217,12 @@ class DocstringAdder(libcst.CSTTransformer):
         return updated_node.with_changes(body=body)
 
 
-def maybe_mangle_name(
-    *, name: str, parent: type | types.ModuleType | types.FunctionType
-) -> str:
-    if not isinstance(parent, type):
+def maybe_mangle_name(*, name: str, parent: RuntimeParent) -> str:
+    if not isinstance(parent.value, type):
         return name
 
     if name.startswith("__") and not name.endswith("__"):
-        return f"_{parent.__name__.lstrip('_')}{name}"
+        return f"_{parent.name.lstrip('_')}{name}"
 
     return name
 
@@ -276,11 +279,9 @@ def add_docstring_to_module_level_stub_object(
 class NOT_FOUND: ...
 
 
-def get_runtime_object_for_stub(
-    runtime_parent: type | types.ModuleType | types.FunctionType, name: str
-) -> Any:
+def get_runtime_object_for_stub(runtime_parent: RuntimeParent, name: str) -> Any:
     # Some `sys`-module APIs are weird.
-    if runtime_parent is sys and name in {
+    if runtime_parent.value is sys and name in {
         "_float_info",
         "_flags",
         "_int_info",
@@ -290,7 +291,7 @@ def get_runtime_object_for_stub(
     }:
         name = name[1:]
     try:
-        runtime = inspect.unwrap(inspect.getattr_static(runtime_parent, name))
+        runtime = inspect.unwrap(inspect.getattr_static(runtime_parent.value, name))
         # `inspect.unwrap()` doesn't do a great job for staticmethod/classmethod on Python 3.9,
         # because the `__wrapped__` attribute was added for these objects in Python 3.10.
         if (
@@ -314,7 +315,7 @@ def gather_documentable_objects(
     node: typeshed_client.NameInfo,
     name: str,
     fullname: str,
-    runtime_parent: type | types.ModuleType,
+    runtime_parent: RuntimeParent,
     blacklisted_objects: frozenset[str],
 ) -> Iterator[DocumentableObject]:
     """Return an iterator of all names in a stub that could potentially have docstrings added to them."""
@@ -354,7 +355,7 @@ def gather_documentable_objects(
                     node=child_node,
                     name=maybe_mangled_child_name,
                     fullname=f"{fullname}.{child_name}",
-                    runtime_parent=runtime_object,
+                    runtime_parent=RuntimeParent(name=name, value=runtime_object),
                     blacklisted_objects=blacklisted_objects,
                 )
 
@@ -417,7 +418,7 @@ def add_docstrings_to_stub(
             node=info,
             name=name,
             fullname=f"{module_name}.{name}",
-            runtime_parent=runtime_module,
+            runtime_parent=RuntimeParent(name=module_name, value=runtime_module),
             blacklisted_objects=blacklisted_objects,
         )
 
