@@ -12,13 +12,12 @@ import io
 import subprocess
 import sys
 import textwrap
-import types
 import typing
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
-from typing import Any, NamedTuple, TypeVar
+from typing import NamedTuple, TypeVar
 
 import libcst
 import tomli
@@ -50,7 +49,7 @@ def clean_docstring(docstring: str) -> str:
 
 
 def add_docstring_to_libcst_node(
-    updated_node: T, runtime_object: Any, *, level: int
+    updated_node: T, runtime_object: RuntimeValue, *, level: int
 ) -> T:
     if updated_node.get_docstring() is not None:
         return updated_node
@@ -71,7 +70,7 @@ def add_docstring_to_libcst_node(
         and updated_node.name.value in object.__dict__
     ):
         method_docstring_on_object = get_runtime_docstring(
-            runtime=object.__dict__[updated_node.name.value]
+            runtime=RuntimeValue(inner=object.__dict__[updated_node.name.value])
         )
         if docstring == method_docstring_on_object:
             return updated_node
@@ -132,9 +131,17 @@ def add_docstring_to_libcst_node(
     return updated_node.with_changes(body=new_body)
 
 
+@dataclass
+class RuntimeValue:
+    inner: object
+
+    def is_not_found(self) -> bool:
+        return self.inner is NOT_FOUND
+
+
 class RuntimeParent(NamedTuple):
     name: str
-    value: type | types.ModuleType | types.FunctionType
+    value: RuntimeValue
 
 
 @dataclass
@@ -150,8 +157,9 @@ class DocstringAdder(libcst.CSTTransformer):
             runtime_parent=self.runtime_parents[-1],
             name=self.maybe_mangled_name(node.name.value),
         )
-        if runtime_object is NOT_FOUND:
+        if runtime_object is None:
             self.log_runtime_object_not_found(node.name.value)
+            runtime_object = RuntimeValue(NOT_FOUND)
         self.runtime_parents.append(
             RuntimeParent(name=node.name.value, value=runtime_object)
         )
@@ -160,7 +168,7 @@ class DocstringAdder(libcst.CSTTransformer):
         self, original_node: libcst.ClassDef, updated_node: libcst.ClassDef
     ) -> libcst.ClassDef:
         runtime_class = self.runtime_parents.pop().value
-        if runtime_class is NOT_FOUND:
+        if runtime_class.is_not_found():
             return original_node
         else:
             return add_docstring_to_libcst_node(
@@ -178,13 +186,13 @@ class DocstringAdder(libcst.CSTTransformer):
         self, original_node: libcst.FunctionDef, updated_node: libcst.FunctionDef
     ) -> libcst.FunctionDef:
         runtime_parent = self.runtime_parents[-1]
-        if runtime_parent.value is NOT_FOUND:
+        if runtime_parent.value.is_not_found():
             return original_node
         runtime_object = get_runtime_object_for_stub(
             runtime_parent=runtime_parent,
             name=self.maybe_mangled_name(updated_node.name.value),
         )
-        if runtime_object is NOT_FOUND:
+        if runtime_object is None:
             self.log_runtime_object_not_found(updated_node.name.value)
             return original_node
         return add_docstring_to_libcst_node(
@@ -227,24 +235,26 @@ def maybe_mangle_name(*, name: str, parent: RuntimeParent) -> str:
     return name
 
 
-def get_runtime_docstring(runtime: Any) -> str | None:
+def get_runtime_docstring(runtime: RuntimeValue) -> str | None:
+    runtime_object = runtime.inner
+
     try:
         # Don't use `inspect.getdoc()` here: it returns the docstring from superclasses
         # if the docstring has not been overridden on a subclass, and that's not what we want.
-        runtime_docstring = runtime.__doc__
+        runtime_docstring = runtime_object.__doc__
     except Exception:
         return None
 
     if not isinstance(runtime_docstring, str):
         return None
 
-    if runtime is not staticmethod:
+    if runtime_object is not staticmethod:
         assert runtime_docstring != staticmethod.__doc__, runtime
 
-    if runtime is not classmethod:
+    if runtime_object is not classmethod:
         assert runtime_docstring != classmethod.__doc__, runtime
 
-    if runtime is not property:
+    if runtime_object is not property:
         assert runtime_docstring != property.__doc__, runtime
 
     return inspect.cleandoc(runtime_docstring)
@@ -279,9 +289,11 @@ def add_docstring_to_module_level_stub_object(
 class NOT_FOUND: ...
 
 
-def get_runtime_object_for_stub(runtime_parent: RuntimeParent, name: str) -> Any:
+def get_runtime_object_for_stub(
+    runtime_parent: RuntimeParent, name: str
+) -> RuntimeValue | None:
     # Some `sys`-module APIs are weird.
-    if runtime_parent.value is sys and name in {
+    if runtime_parent.value.inner is sys and name in {
         "_float_info",
         "_flags",
         "_int_info",
@@ -291,7 +303,9 @@ def get_runtime_object_for_stub(runtime_parent: RuntimeParent, name: str) -> Any
     }:
         name = name[1:]
     try:
-        runtime = inspect.unwrap(inspect.getattr_static(runtime_parent.value, name))
+        runtime = inspect.unwrap(
+            inspect.getattr_static(runtime_parent.value.inner, name)
+        )
         # `inspect.unwrap()` doesn't do a great job for staticmethod/classmethod on Python 3.9,
         # because the `__wrapped__` attribute was added for these objects in Python 3.10.
         if (
@@ -302,13 +316,13 @@ def get_runtime_object_for_stub(runtime_parent: RuntimeParent, name: str) -> Any
             runtime = runtime.__func__
     # Some getattr() calls raise TypeError, or something even more exotic
     except Exception:
-        return NOT_FOUND
+        return None
 
     # The docstrings from `collections.abc` are better than those from `typing`.
     if isinstance(runtime, type(typing.Mapping)):
         runtime = runtime.__origin__  # type: ignore[attr-defined]
 
-    return runtime
+    return RuntimeValue(inner=runtime)
 
 
 def gather_documentable_objects(
@@ -348,7 +362,7 @@ def gather_documentable_objects(
 
             runtime_object = get_runtime_object_for_stub(runtime_parent, name)
 
-            if runtime_object is NOT_FOUND:
+            if runtime_object is None:
                 log(f"Could not find {fullname} at runtime")
             else:
                 yield from gather_documentable_objects(
@@ -418,7 +432,9 @@ def add_docstrings_to_stub(
             node=info,
             name=name,
             fullname=f"{module_name}.{name}",
-            runtime_parent=RuntimeParent(name=module_name, value=runtime_module),
+            runtime_parent=RuntimeParent(
+                name=module_name, value=RuntimeValue(inner=runtime_module)
+            ),
             blacklisted_objects=blacklisted_objects,
         )
 
