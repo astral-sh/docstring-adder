@@ -12,16 +12,18 @@ import io
 import subprocess
 import sys
 import textwrap
+import types
 import typing
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
-from typing import Any, NamedTuple, NoReturn, TypeVar
+from typing import NamedTuple, TypeVar
 
 import libcst
 import tomli
 import typeshed_client
+import typeshed_client.parser
 from termcolor import colored
 
 
@@ -41,14 +43,23 @@ class DocumentableObject(NamedTuple):
     runtime_parent: RuntimeParent
 
 
-T = TypeVar("T", libcst.ClassDef, libcst.FunctionDef)
+DocumentableT = TypeVar("DocumentableT", libcst.ClassDef, libcst.FunctionDef)
+SuiteT = TypeVar("SuiteT", libcst.Module, libcst.IndentedBlock)
 
 
 def clean_docstring(docstring: str) -> str:
     return docstring.rstrip().replace("\\", "\\\\")
 
 
-def add_docstring_to_libcst_node(updated_node: T, runtime_object: RuntimeValue) -> T:
+def add_docstring_to_libcst_node(
+    updated_node: DocumentableT,
+    runtime_object: RuntimeValue,
+    *,
+    blacklisted_objects: frozenset[str],
+) -> DocumentableT:
+    if updated_node.name.value in blacklisted_objects:
+        return updated_node
+
     if updated_node.get_docstring() is not None:
         return updated_node
 
@@ -141,9 +152,24 @@ class RuntimeParent(NamedTuple):
     value: RuntimeValue
 
 
-@dataclass
 class DocstringAdder(libcst.CSTTransformer):
-    runtime_parents: list[RuntimeParent]
+    def __init__(
+        self,
+        *,
+        module_name: str,
+        runtime_module: types.ModuleType,
+        stub_file_path: Path,
+        typeshed_client_context: typeshed_client.SearchContext,
+        blacklisted_objects: frozenset[str],
+    ) -> None:
+        self.runtime_parents: list[RuntimeParent] = [
+            RuntimeParent(name=module_name, value=RuntimeValue(inner=runtime_module))
+        ]
+        self.stub_file_path: Path = stub_file_path
+        self.typeshed_client_context: typeshed_client.SearchContext = (
+            typeshed_client_context
+        )
+        self.blacklisted_objects: frozenset[str] = blacklisted_objects
 
     def maybe_mangled_name(self, name: str) -> str:
         return maybe_mangle_name(name=name, parent=self.runtime_parents[-1])
@@ -168,7 +194,9 @@ class DocstringAdder(libcst.CSTTransformer):
             return original_node
         else:
             return add_docstring_to_libcst_node(
-                updated_node=updated_node, runtime_object=runtime_class
+                updated_node=updated_node,
+                runtime_object=runtime_class,
+                blacklisted_objects=self.blacklisted_objects,
             )
 
     def log_runtime_object_not_found(self, name: str) -> None:
@@ -190,12 +218,14 @@ class DocstringAdder(libcst.CSTTransformer):
             self.log_runtime_object_not_found(updated_node.name.value)
             return original_node
         return add_docstring_to_libcst_node(
-            updated_node=updated_node, runtime_object=runtime_object
+            updated_node=updated_node,
+            runtime_object=runtime_object,
+            blacklisted_objects=self.blacklisted_objects,
         )
 
-    def leave_IndentedBlock(
-        self, original_node: libcst.IndentedBlock, updated_node: libcst.IndentedBlock
-    ) -> libcst.IndentedBlock:
+    def _leave_Suite(self, original_node: SuiteT, updated_node: SuiteT) -> SuiteT:
+        assert len(original_node.body) == len(updated_node.body)
+
         body: list[libcst.BaseStatement] = []
         seen: set[str] = set()
 
@@ -214,103 +244,35 @@ class DocstringAdder(libcst.CSTTransformer):
 
         return updated_node.with_changes(body=body)
 
+    def leave_IndentedBlock(
+        self, original_node: libcst.IndentedBlock, updated_node: libcst.IndentedBlock
+    ) -> libcst.IndentedBlock:
+        return self._leave_Suite(original_node, updated_node)
+
+    def leave_Module(
+        self, original_node: libcst.Module, updated_node: libcst.Module
+    ) -> libcst.Module:
+        return self._leave_Suite(original_node, updated_node)
+
     def leave_If(self, original_node: libcst.If, updated_node: libcst.If) -> libcst.If:
-        condition_as_module = libcst.Module(
+        condition_as_libcst_module = libcst.Module(
             body=[
                 libcst.SimpleStatementLine(body=[libcst.Expr(value=original_node.test)])
             ]
         )
-        parsed_condition = LiteralEvalVisitor().visit(
-            ast.parse(condition_as_module.code)
+        condition_as_ast_expr = ast.parse(condition_as_libcst_module.code).body[0]
+        assert isinstance(condition_as_ast_expr, ast.Expr)
+        literal_eval_visitor = typeshed_client.parser._LiteralEvalVisitor(
+            self.typeshed_client_context, self.stub_file_path
         )
-        if parsed_condition:
+        parsed_condition = literal_eval_visitor.visit(condition_as_ast_expr.value)
+        if parsed_condition is True:
+            return updated_node.with_changes(orelse=original_node.orelse)
+        elif parsed_condition is False:
+            return updated_node.with_changes(body=original_node.body)
+        else:
+            assert parsed_condition is None, parsed_condition
             return updated_node
-        else:
-            return original_node
-
-
-class LiteralEvalVisitor(ast.NodeVisitor):
-    """Vendored and adapted from Jelle Zijlstra's `typeshed_client` library.
-
-    See `_LiteralEvalVisitor` for the original version:
-    https://github.com/JelleZijlstra/typeshed_client/blob/6c7740f50c749afbdd68eb17dcdb807353222fae/typeshed_client/parser.py#L433-L500
-    """
-
-    def visit_Constant(self, node: ast.Constant) -> object:
-        return node.value
-
-    def visit_Tuple(self, node: ast.Tuple) -> tuple[object, ...]:
-        return tuple(self.visit(elt) for elt in node.elts)
-
-    def visit_Subscript(self, node: ast.Subscript) -> object:
-        value = self.visit(node.value)
-        slc = self.visit(node.slice)
-        return value[slc]
-
-    def visit_Compare(self, node: ast.Compare) -> bool:
-        if len(node.ops) != 1:
-            assert False, f"Cannot evaluate chained comparison {ast.dump(node)}"
-        fn = _CMP_OP_TO_FUNCTION[type(node.ops[0])]
-        return fn(self.visit(node.left), self.visit(node.comparators[0]))
-
-    def visit_BoolOp(self, node: ast.BoolOp) -> bool:
-        val = None
-
-        for val_node in node.values:
-            val = self.visit(val_node)
-            if (isinstance(node.op, ast.Or) and val) or (
-                isinstance(node.op, ast.And) and not val
-            ):
-                assert isinstance(val, bool)
-                return val
-
-        assert isinstance(val, bool)
-        return val
-
-    def visit_Slice(self, node: ast.Slice) -> slice:
-        lower = self.visit(node.lower) if node.lower is not None else None
-        upper = self.visit(node.upper) if node.upper is not None else None
-        step = self.visit(node.step) if node.step is not None else None
-        return slice(lower, upper, step)
-
-    def visit_Attribute(self, node: ast.Attribute) -> object:
-        val = node.value
-        if not isinstance(val, ast.Name):
-            assert False, f"Invalid code in stub: {ast.dump(node)}"
-        if val.id != "sys":
-            assert False, (
-                f"Attribute access must be on the sys module: {ast.dump(node)}"
-            )
-        if node.attr == "platform":
-            return sys.platform
-        elif node.attr == "version_info":
-            return sys.version
-        else:
-            assert False, f"Invalid attribute on {ast.dump(node)}"
-
-    def visit_Name(self, node: ast.Name) -> bool:
-        # We're type checking (probably), but we're not mypy.
-        if node.id in {"TYPE_CHECKING", "MYPY"}:
-            return True
-        else:
-            assert False, f"Invalid name {node.id!r} in stub condition"
-
-    def generic_visit(self, node: ast.AST) -> NoReturn:
-        assert False, f"Cannot evaluate node {ast.dump(node)}"
-
-
-_CMP_OP_TO_FUNCTION: dict[type[ast.AST], Callable[[Any, Any], bool]] = {
-    ast.Eq: lambda x, y: x == y,
-    ast.NotEq: lambda x, y: x != y,
-    ast.Lt: lambda x, y: x < y,
-    ast.LtE: lambda x, y: x <= y,
-    ast.Gt: lambda x, y: x > y,
-    ast.GtE: lambda x, y: x >= y,
-    ast.Is: lambda x, y: x is y,
-    ast.IsNot: lambda x, y: x is not y,
-    ast.In: lambda x, y: x in y,
-    ast.NotIn: lambda x, y: x not in y,
-}
 
 
 def maybe_mangle_name(*, name: str, parent: RuntimeParent) -> str:
@@ -414,23 +376,21 @@ def add_docstrings_to_stub(
     parsed_module = libcst.parse_module(stub_source)
 
     if runtime_module.__doc__ and parsed_module.get_docstring() is None:
-        docstring = '"""\n' + clean_docstring(runtime_module.__doc__) + '\n"""'
+        docstring = '"""\n' + clean_docstring(runtime_module.__doc__) + '\n"""\n'
         if stub_source.strip():
             stub_source = docstring + stub_source
         else:
             stub_source = docstring
         parsed_module = libcst.parse_module(stub_source)
 
-    parsed_module.visit(
-        DocstringAdder(
-            runtime_parents=[
-                RuntimeParent(
-                    name=module_name, value=RuntimeValue(inner=runtime_module)
-                )
-            ]
-        )
+    transformer = DocstringAdder(
+        module_name=module_name,
+        runtime_module=runtime_module,
+        stub_file_path=path,
+        typeshed_client_context=context,
+        blacklisted_objects=blacklisted_objects,
     )
-    new_module = parsed_module.code
+    new_module = parsed_module.visit(transformer).code
     path.write_text(new_module, encoding="utf-8")
 
     check_no_destructive_changes(
@@ -466,9 +426,9 @@ def check_no_destructive_changes(path: Path, previous_stub: str, new_stub: str) 
     new_checker = SanityChecker()
     new_checker.visit(new_ast)
 
-    assert previous_checker.names == new_checker.names, (
-        f"Destructive changes appear to have been made to {path}"
-    )
+    assert (
+        previous_checker.names == new_checker.names
+    ), f"Destructive changes appear to have been made to {path}"
 
 
 def install_typeshed_packages(typeshed_paths: Sequence[Path]) -> None:
@@ -497,11 +457,19 @@ def install_typeshed_packages(typeshed_paths: Sequence[Path]) -> None:
 # * `__main__` exists at runtime but will just reflect details of how docstring-adder itself was run.
 # * `sys._monitoring` exists as `sys.monitoring` at runtime, but none of the APIs in that module
 #   have docstrings, so no point trying to add them.
-STDLIB_MODULE_BLACKLIST = (
-    "_typeshed/*.pyi",
-    "antigravity.pyi",
-    "__main__.pyi",
-    "sys/_monitoring.pyi",
+STDLIB_MODULE_BLACKLIST = frozenset(
+    {
+        "_typeshed/*.pyi",
+        "antigravity.pyi",
+        "__main__.pyi",
+        "sys/_monitoring.pyi",
+    }
+)
+
+STDLIB_OBJECT_BLACKLIST = frozenset(
+    {
+        "enum.auto.value",
+    }
 )
 
 
@@ -545,10 +513,8 @@ def main() -> None:
         "--blacklists",
         nargs="+",
         help=(
-            "List of paths pointing to 'blacklist files',"
-            " which can be used to specify functions/classes that docstring-adder should skip"
-            " trying to add docstrings to. Note: if the name of a class is included"
-            " in a blacklist, all methods within the class will be skipped as well as the class."
+            "List of paths pointing to 'blacklist files', which can be used to specify functions/classes "
+            "that docstring-adder should skip trying to add docstrings to."
         ),
         default=(),
     )
@@ -573,6 +539,7 @@ def main() -> None:
     combined_blacklist = frozenset(
         chain.from_iterable(load_blacklist(Path(path)) for path in args.blacklists)
     )
+    stdlib_blacklist = combined_blacklist | STDLIB_OBJECT_BLACKLIST
     context = typeshed_client.finder.get_search_context(
         typeshed=stdlib_path, search_path=package_paths, version=sys.version_info[:2]
     )
@@ -585,7 +552,7 @@ def main() -> None:
                 log(f"Skipping {module}: blacklisted module")
                 continue
             else:
-                add_docstrings_to_stub(module, context, combined_blacklist)
+                add_docstrings_to_stub(module, context, stdlib_blacklist)
         elif any(path.is_relative_to(p) for p in package_paths):
             add_docstrings_to_stub(module, context, combined_blacklist)
     m = "\n--- Successfully codemodded typeshed ---"
