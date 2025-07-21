@@ -11,7 +11,6 @@ import inspect
 import io
 import subprocess
 import sys
-import textwrap
 import types
 import typing
 from collections.abc import Sequence
@@ -47,8 +46,28 @@ DocumentableT = TypeVar("DocumentableT", libcst.ClassDef, libcst.FunctionDef)
 SuiteT = TypeVar("SuiteT", libcst.Module, libcst.IndentedBlock)
 
 
-def clean_docstring(docstring: str) -> str:
-    return docstring.rstrip().replace("\\", "\\\\")
+def triple_quoted_docstring(content: str) -> str:
+    content = content.replace("\\", "\\\\")
+    docstring = f'"""{content}'
+
+    # For a single-line docstring, this can result in funny things like:
+    #
+    # ```py
+    # def foo():
+    #     """A docstring.
+    #     """
+    # ```
+    #
+    # But we don't need to worry about that here: Black sorts that out for us and turns it into:
+    #
+    # ```py
+    # def foo():
+    #     """A docstring."""
+    # ```
+    if not docstring.strip(" \t").endswith("\n"):
+        docstring += "\n"
+
+    return docstring + '"""'
 
 
 def add_docstring_to_libcst_node(
@@ -83,25 +102,9 @@ def add_docstring_to_libcst_node(
         if docstring == method_docstring_on_object:
             return updated_node
 
-    indentation = " " * 4
-
-    # For a single-line docstring, this can result in funny things like:
-    #
-    # ```py
-    # def foo():
-    #     """A docstring.
-    #     """
-    # ```
-    #
-    # But we don't need to worry about that here: Black sorts that out for us and turns it into:
-    #
-    # ```py
-    # def foo():
-    #     """A docstring."""
-    # ```
-    indented_docstring = f'"""{textwrap.indent(clean_docstring(docstring), indentation).lstrip(" ")}\n{indentation}"""'
-
-    docstring_node = libcst.Expr(libcst.SimpleString(indented_docstring))
+    docstring_node = libcst.Expr(
+        libcst.SimpleString(triple_quoted_docstring(docstring))
+    )
 
     # If the body is just a `...`, replace it with just the docstring.
     if (
@@ -376,7 +379,7 @@ def add_docstrings_to_stub(
     parsed_module = libcst.parse_module(stub_source)
 
     if runtime_module.__doc__ and parsed_module.get_docstring() is None:
-        docstring = '"""\n' + clean_docstring(runtime_module.__doc__) + '\n"""\n'
+        docstring = triple_quoted_docstring(runtime_module.__doc__) + "\n"
         stub_source = docstring + stub_source if stub_source.strip() else docstring
         parsed_module = libcst.parse_module(stub_source)
 
