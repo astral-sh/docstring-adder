@@ -28,7 +28,7 @@ requires-dist = [
     { name = "libcst", specifier = ">=1.8.2" },
     { name = "termcolor", specifier = ">=3.1.0" },
     { name = "tomli", specifier = ">=2.2.1" },
-    { name = "typeshed-client", specifier = ">=2.2.2" },
+    { name = "typeshed-client", specifier = ">=2.8.2" },
     { name = "typing-extensions" },
 ]
 

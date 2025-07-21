@@ -14,7 +14,7 @@ dependencies = [
     "libcst>=1.8.2",
     "termcolor>=3.1.0",
     "tomli>=2.2.1",
-    "typeshed-client>=2.2.2",
+    "typeshed-client>=2.8.2",
     # So that we can add docs for `typing_extensions` APIs:
     "typing_extensions",
 ]
@@ -24,6 +24,10 @@ classifiers = [
     "Intended Audience :: Developers",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "License :: OSI Approved :: MIT License",

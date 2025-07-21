@@ -23,9 +23,7 @@ repos:
     rev: v0.45.0
     hooks:
       - id: markdownlint-fix
-        args: ["--ignore", "stats_website/.snippets"]
       - id: markdownlint
-        args: ["--ignore", "stats_website/.snippets"]
   - repo: https://github.com/pre-commit/mirrors-prettier
     rev: v4.0.0-alpha.8
     hooks:
