@@ -377,10 +377,7 @@ def add_docstrings_to_stub(
 
     if runtime_module.__doc__ and parsed_module.get_docstring() is None:
         docstring = '"""\n' + clean_docstring(runtime_module.__doc__) + '\n"""\n'
-        if stub_source.strip():
-            stub_source = docstring + stub_source
-        else:
-            stub_source = docstring
+        stub_source = docstring + stub_source if stub_source.strip() else docstring
         parsed_module = libcst.parse_module(stub_source)
 
     transformer = DocstringAdder(
@@ -426,9 +423,9 @@ def check_no_destructive_changes(path: Path, previous_stub: str, new_stub: str) 
     new_checker = SanityChecker()
     new_checker.visit(new_ast)
 
-    assert (
-        previous_checker.names == new_checker.names
-    ), f"Destructive changes appear to have been made to {path}"
+    assert previous_checker.names == new_checker.names, (
+        f"Destructive changes appear to have been made to {path}"
+    )
 
 
 def install_typeshed_packages(typeshed_paths: Sequence[Path]) -> None:
@@ -457,22 +454,18 @@ def install_typeshed_packages(typeshed_paths: Sequence[Path]) -> None:
 # * `__main__` exists at runtime but will just reflect details of how docstring-adder itself was run.
 # * `sys._monitoring` exists as `sys.monitoring` at runtime, but none of the APIs in that module
 #   have docstrings, so no point trying to add them.
-STDLIB_MODULE_BLACKLIST = frozenset(
-    {
-        "_typeshed/*.pyi",
-        "antigravity.pyi",
-        "__main__.pyi",
-        "sys/_monitoring.pyi",
-    }
-)
+STDLIB_MODULE_BLACKLIST = frozenset({
+    "_typeshed/*.pyi",
+    "antigravity.pyi",
+    "__main__.pyi",
+    "sys/_monitoring.pyi",
+})
 
-STDLIB_OBJECT_BLACKLIST = frozenset(
-    {
-        # On older Python versions, `enum.auto.value` is just an instance of `object`;
-        # we don't want docstring-adder to add the docstring from `object` to it.
-        "enum.auto.value",
-    }
-)
+STDLIB_OBJECT_BLACKLIST = frozenset({
+    # On older Python versions, `enum.auto.value` is just an instance of `object`;
+    # we don't want docstring-adder to add the docstring from `object` to it.
+    "enum.auto.value"
+})
 
 
 def load_blacklist(path: Path) -> frozenset[str]:
