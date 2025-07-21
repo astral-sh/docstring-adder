@@ -468,6 +468,8 @@ STDLIB_MODULE_BLACKLIST = frozenset(
 
 STDLIB_OBJECT_BLACKLIST = frozenset(
     {
+        # On older Python versions, `enum.auto.value` is just an instance of `object`;
+        # we don't want docstring-adder to add the docstring from `object` to it.
         "enum.auto.value",
     }
 )
