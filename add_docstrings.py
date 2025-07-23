@@ -58,78 +58,6 @@ def triple_quoted_docstring(content: str) -> str:
     return docstring + '"""'
 
 
-def add_docstring_to_libcst_node(
-    updated_node: DocumentableT,
-    runtime_object: RuntimeValue,
-    *,
-    blacklisted_objects: frozenset[str],
-) -> DocumentableT:
-    if updated_node.name.value in blacklisted_objects:
-        return updated_node
-
-    if updated_node.get_docstring() is not None:
-        return updated_node
-
-    docstring = get_runtime_docstring(runtime=runtime_object)
-    if docstring is None:
-        return updated_node
-
-    # E.g. we want to avoid a bajillion `__init__` docstrings that are just
-    #
-    # > Initialize self.  See help(type(self)) for accurate signature.
-    #
-    # Which is exactly what we get for `help(object.__init__)`
-    if (
-        # not sure why mypy thinks this is redundant...!
-        isinstance(updated_node, libcst.FunctionDef)  # type: ignore[redundant-expr]
-        and updated_node.name.value in object.__dict__
-    ):
-        method_docstring_on_object = get_runtime_docstring(
-            runtime=RuntimeValue(inner=object.__dict__[updated_node.name.value])
-        )
-        if docstring == method_docstring_on_object:
-            return updated_node
-
-    docstring_node = libcst.Expr(
-        libcst.SimpleString(triple_quoted_docstring(docstring))
-    )
-
-    # If the body is just a `...`, replace it with just the docstring.
-    if (
-        isinstance(updated_node.body, libcst.SimpleStatementSuite)
-        and len(updated_node.body.body) == 1
-        and isinstance(updated_node.body.body[0], libcst.Expr)
-        and isinstance(updated_node.body.body[0].value, libcst.Ellipsis)
-    ):
-        new_body = libcst.IndentedBlock(
-            body=[libcst.SimpleStatementLine(body=[docstring_node])],
-            # but preserve `# type: ignore` comments
-            header=updated_node.body.trailing_whitespace,
-        )
-    elif isinstance(updated_node.body, libcst.IndentedBlock):
-        if (
-            len(updated_node.body.body) == 1
-            and isinstance(updated_node.body.body[0], libcst.Expr)
-            and isinstance(updated_node.body.body[0].value, libcst.Ellipsis)
-        ):
-            new_body = updated_node.body.with_changes(
-                body=[libcst.SimpleStatementLine(body=[docstring_node])]
-            )
-        else:
-            new_body = updated_node.body.with_changes(
-                body=list(
-                    chain(
-                        [libcst.SimpleStatementLine(body=[docstring_node])],
-                        updated_node.body.body,
-                    )
-                )
-            )
-    else:
-        return updated_node
-
-    return updated_node.with_changes(body=new_body)
-
-
 @dataclass
 class RuntimeValue:
     inner: object
@@ -191,16 +119,17 @@ class DocstringAdder(libcst.CSTTransformer):
         if runtime_class.is_not_found():
             return original_node
         else:
-            return add_docstring_to_libcst_node(
-                updated_node=updated_node,
-                runtime_object=runtime_class,
-                blacklisted_objects=self.blacklisted_objects,
+            return self.document_class_or_function(
+                updated_node=updated_node, runtime_object=runtime_class
             )
 
-    def log_runtime_object_not_found(self, name: str) -> None:
+    def object_fullname(self, final_part: str) -> str:
         parent_fullname = ".".join(parent.name for parent in self.runtime_parents)
-        mangled_name = self.maybe_mangled_name(name)
-        log(f"Could not find {parent_fullname}.{mangled_name} at runtime")
+        mangled_name = self.maybe_mangled_name(final_part)
+        return f"{parent_fullname}.{mangled_name}"
+
+    def log_runtime_object_not_found(self, name: str) -> None:
+        log(f"Could not find {self.object_fullname(name)} at runtime")
 
     def leave_FunctionDef(
         self, original_node: libcst.FunctionDef, updated_node: libcst.FunctionDef
@@ -215,10 +144,8 @@ class DocstringAdder(libcst.CSTTransformer):
         if runtime_object is None:
             self.log_runtime_object_not_found(updated_node.name.value)
             return original_node
-        return add_docstring_to_libcst_node(
-            updated_node=updated_node,
-            runtime_object=runtime_object,
-            blacklisted_objects=self.blacklisted_objects,
+        return self.document_class_or_function(
+            updated_node=updated_node, runtime_object=runtime_object
         )
 
     def _leave_Suite(self, original_node: SuiteT, updated_node: SuiteT) -> SuiteT:
@@ -271,6 +198,75 @@ class DocstringAdder(libcst.CSTTransformer):
         else:
             assert parsed_condition is None, parsed_condition
             return updated_node
+
+    def document_class_or_function(
+        self, updated_node: DocumentableT, runtime_object: RuntimeValue
+    ) -> DocumentableT:
+        object_fullname = self.object_fullname(updated_node.name.value)
+        if object_fullname in self.blacklisted_objects:
+            return updated_node
+
+        if updated_node.get_docstring() is not None:
+            return updated_node
+
+        docstring = get_runtime_docstring(runtime=runtime_object)
+        if docstring is None:
+            return updated_node
+
+        # E.g. we want to avoid a bajillion `__init__` docstrings that are just
+        #
+        # > Initialize self.  See help(type(self)) for accurate signature.
+        #
+        # Which is exactly what we get for `help(object.__init__)`
+        if (
+            # not sure why mypy thinks this is redundant...!
+            isinstance(updated_node, libcst.FunctionDef)  # type: ignore[redundant-expr]
+            and updated_node.name.value in object.__dict__
+        ):
+            method_docstring_on_object = get_runtime_docstring(
+                runtime=RuntimeValue(inner=object.__dict__[updated_node.name.value])
+            )
+            if docstring == method_docstring_on_object:
+                return updated_node
+
+        docstring_node = libcst.Expr(
+            libcst.SimpleString(triple_quoted_docstring(docstring))
+        )
+
+        # If the body is just a `...`, replace it with just the docstring.
+        if (
+            isinstance(updated_node.body, libcst.SimpleStatementSuite)
+            and len(updated_node.body.body) == 1
+            and isinstance(updated_node.body.body[0], libcst.Expr)
+            and isinstance(updated_node.body.body[0].value, libcst.Ellipsis)
+        ):
+            new_body = libcst.IndentedBlock(
+                body=[libcst.SimpleStatementLine(body=[docstring_node])],
+                # but preserve `# type: ignore` comments
+                header=updated_node.body.trailing_whitespace,
+            )
+        elif isinstance(updated_node.body, libcst.IndentedBlock):
+            if (
+                len(updated_node.body.body) == 1
+                and isinstance(updated_node.body.body[0], libcst.Expr)
+                and isinstance(updated_node.body.body[0].value, libcst.Ellipsis)
+            ):
+                new_body = updated_node.body.with_changes(
+                    body=[libcst.SimpleStatementLine(body=[docstring_node])]
+                )
+            else:
+                new_body = updated_node.body.with_changes(
+                    body=list(
+                        chain(
+                            [libcst.SimpleStatementLine(body=[docstring_node])],
+                            updated_node.body.body,
+                        )
+                    )
+                )
+        else:
+            return updated_node
+
+        return updated_node.with_changes(body=new_body)
 
 
 def get_runtime_docstring(runtime: RuntimeValue) -> str | None:
