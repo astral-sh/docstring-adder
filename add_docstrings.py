@@ -30,18 +30,6 @@ def log(*objects: object) -> None:
     print(colored(" ".join(map(str, objects)), "yellow"))
 
 
-def get_end_lineno(node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) -> int:
-    assert node.end_lineno is not None
-    return node.end_lineno
-
-
-class DocumentableObject(NamedTuple):
-    """An object in a stub that could have a docstring added to it."""
-
-    stub_ast: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
-    runtime_parent: RuntimeParent
-
-
 DocumentableT = TypeVar("DocumentableT", libcst.ClassDef, libcst.FunctionDef)
 SuiteT = TypeVar("SuiteT", libcst.Module, libcst.IndentedBlock)
 
@@ -175,7 +163,14 @@ class DocstringAdder(libcst.CSTTransformer):
         self.blacklisted_objects: frozenset[str] = blacklisted_objects
 
     def maybe_mangled_name(self, name: str) -> str:
-        return maybe_mangle_name(name=name, parent=self.runtime_parents[-1])
+        parent = self.runtime_parents[-1]
+        if not isinstance(parent.value, type):
+            return name
+
+        if name.startswith("__") and not name.endswith("__"):
+            return f"_{parent.name.lstrip('_')}{name}"
+
+        return name
 
     def visit_ClassDef(self, node: libcst.ClassDef) -> None:
         runtime_object = get_runtime_object_for_stub(
@@ -276,16 +271,6 @@ class DocstringAdder(libcst.CSTTransformer):
         else:
             assert parsed_condition is None, parsed_condition
             return updated_node
-
-
-def maybe_mangle_name(*, name: str, parent: RuntimeParent) -> str:
-    if not isinstance(parent.value, type):
-        return name
-
-    if name.startswith("__") and not name.endswith("__"):
-        return f"_{parent.name.lstrip('_')}{name}"
-
-    return name
 
 
 def get_runtime_docstring(runtime: RuntimeValue) -> str | None:
