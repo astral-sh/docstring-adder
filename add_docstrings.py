@@ -397,13 +397,17 @@ class SanityChecker(ast.NodeVisitor):
 def check_no_destructive_changes(path: Path, previous_stub: str, new_stub: str) -> None:
     """Check that the new stub does not contain any destructive changes."""
     previous_ast = ast.parse(previous_stub)
-    new_ast = ast.parse(new_stub)
-
     previous_checker = SanityChecker()
     previous_checker.visit(previous_ast)
 
-    new_checker = SanityChecker()
-    new_checker.visit(new_ast)
+    try:
+        new_ast = ast.parse(new_stub)
+        new_checker = SanityChecker()
+        new_checker.visit(new_ast)
+    except Exception:
+        message = f"\nERROR: new stub file at {path} cannot be parsed/visited\n"
+        print(colored(message, "red"))
+        raise
 
     assert previous_checker.names == new_checker.names, (
         f"Destructive changes appear to have been made to {path}"
