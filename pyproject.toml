@@ -17,6 +17,8 @@ dependencies = [
     "typeshed-client @ git+https://github.com/JelleZijlstra/typeshed_client@dc933baf47b3df4bbaf4e3f2d6a1fe238e6c7c68",
     # So that we can add docs for `typing_extensions` APIs:
     "typing_extensions",
+    # for dynamically installing typeshed packages
+    "uv",
 ]
 keywords = ["typing", "stubs"]
 classifiers = [

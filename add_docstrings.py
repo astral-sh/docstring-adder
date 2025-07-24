@@ -419,10 +419,10 @@ def install_typeshed_packages(typeshed_paths: Sequence[Path]) -> None:
             sys.exit(1)
         metadata_bytes = metadata_path.read_text(encoding="utf-8")
         metadata = tomli.loads(metadata_bytes)
-        version = metadata["version"]
+        version = metadata["version"].lstrip("~=")
         to_install.append(f"{path.name}=={version}")
     if to_install:
-        command = [sys.executable, "-m", "pip", "install", *to_install]
+        command = ["uv", "pip", "install", "--python", sys.executable, *to_install]
         print(f"Running install command: {' '.join(command)}")
         subprocess.check_call(command)
 
