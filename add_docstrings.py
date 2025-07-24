@@ -240,7 +240,7 @@ class DocstringAdder(libcst.CSTTransformer):
         ):
             new_body = libcst.IndentedBlock(
                 body=[libcst.SimpleStatementLine(body=[docstring_node])],
-                # but preserve `# type: ignore` comments
+                # but preserve `type: ignore` comments
                 header=updated_node.body.trailing_whitespace,
             )
         elif isinstance(updated_node.body, libcst.IndentedBlock):
