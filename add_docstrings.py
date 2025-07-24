@@ -22,7 +22,6 @@ from typing import NamedTuple, TypeVar
 import libcst
 import tomli
 import typeshed_client
-import typeshed_client.parser
 from termcolor import colored
 
 
@@ -187,17 +186,16 @@ class DocstringAdder(libcst.CSTTransformer):
         )
         condition_as_ast_expr = ast.parse(condition_as_libcst_module.code).body[0]
         assert isinstance(condition_as_ast_expr, ast.Expr)
-        literal_eval_visitor = typeshed_client.parser._LiteralEvalVisitor(
-            self.typeshed_client_context, self.stub_file_path
+        parsed_condition = typeshed_client.evaluate_expression_truthiness(
+            condition_as_ast_expr.value,
+            ctx=self.typeshed_client_context,
+            file_path=self.stub_file_path,
         )
-        parsed_condition = literal_eval_visitor.visit(condition_as_ast_expr.value)
-        if parsed_condition is True:
+        assert isinstance(parsed_condition, bool)
+        if parsed_condition:
             return updated_node.with_changes(orelse=original_node.orelse)
-        elif parsed_condition is False:
-            return updated_node.with_changes(body=original_node.body)
         else:
-            assert parsed_condition is None, parsed_condition
-            return updated_node
+            return updated_node.with_changes(body=original_node.body)
 
     def document_class_or_function(
         self, updated_node: DocumentableT, runtime_object: RuntimeValue
