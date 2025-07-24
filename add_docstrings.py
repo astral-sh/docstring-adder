@@ -35,7 +35,11 @@ SuiteT = TypeVar("SuiteT", libcst.Module, libcst.IndentedBlock)
 
 def triple_quoted_docstring(content: str) -> str:
     content = content.replace("\\", "\\\\")
-    docstring = f'"""{content}'
+    triple_quote = "'''" if '"""' in content else '"""'
+
+    docstring = triple_quote + "".join(
+        char if char.isprintable() or char.isspace() else repr(char) for char in content
+    )
 
     # For a single-line docstring, this can result in funny things like:
     #
@@ -54,7 +58,7 @@ def triple_quoted_docstring(content: str) -> str:
     if not docstring.strip(" \t").endswith("\n"):
         docstring += "\n"
 
-    return docstring + '"""'
+    return docstring + triple_quote
 
 
 @dataclass
@@ -425,10 +429,19 @@ def install_typeshed_packages(typeshed_paths: Sequence[Path]) -> None:
         metadata = tomli.loads(metadata_bytes)
         version = metadata["version"].lstrip("~=")
         to_install.append(f"{path.name}=={version}")
+        stubtest_requirements = (
+            metadata.get("tool", {})
+            .get("stubtest", {})
+            .get("stubtest_requirements", [])
+        )
+        to_install.extend(stubtest_requirements)
     if to_install:
         command = ["uv", "pip", "install", "--python", sys.executable, *to_install]
         print(f"Running install command: {' '.join(command)}")
-        subprocess.check_call(command)
+        try:
+            subprocess.check_call(command)
+        except subprocess.CalledProcessError:
+            sys.exit(10)
 
 
 # A hardcoded list of stdlib modules to skip
@@ -485,7 +498,8 @@ def main() -> None:
         "--typeshed-packages",
         nargs="+",
         help=(
-            "List of typeshed packages to add docstrings to. WARNING: We will install the package locally."
+            "List of typeshed packages to add docstrings to. WARNING: We will install the package locally. "
+            "If installation of packages fails, we will exit with code 10."
         ),
         default=(),
     )
