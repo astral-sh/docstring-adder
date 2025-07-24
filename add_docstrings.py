@@ -394,6 +394,103 @@ class SanityChecker(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+def _make_safety_error(
+    old: ast.AST, new: ast.AST, old_value: object, new_value: object, message: str
+) -> RuntimeError:
+    old_explanation = f" (at line {old.lineno})" if hasattr(old, "lineno") else ""
+    new_explanation = f" (at line {new.lineno})" if hasattr(new, "lineno") else ""
+    raise RuntimeError(
+        f"{message}: {old_value}{old_explanation} != {new_value}{new_explanation}"
+    )
+
+
+def assert_asts_match(old: ast.AST, new: ast.AST) -> None:
+    """Check that two ASTs are equivalent, except for changes we choose to ignore.
+
+    Raises RuntimeError if the ASTs are not equivalent.
+    """
+    if type(old) is not type(new):
+        raise _make_safety_error(
+            old, new, type(old).__name__, type(new).__name__, "AST node types differ"
+        )
+    for field in old._fields:
+        old_field = getattr(old, field)
+        new_field = getattr(new, field)
+        if field == "body" and isinstance(
+            old, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        ):
+            # Allow a body with just a docstring to be equivalent to one with just "..."
+            if (
+                old_field
+                and isinstance(old_field[0], ast.Expr)
+                and isinstance(old_field[0].value, ast.Constant)
+                and isinstance(old_field[0].value.value, str)
+            ):
+                old_field = old_field[1:]
+                if not old_field:
+                    old_field = [ast.Expr(value=ast.Constant(value=...))]
+            if (
+                new_field
+                and isinstance(new_field[0], ast.Expr)
+                and isinstance(new_field[0].value, ast.Constant)
+                and isinstance(new_field[0].value.value, str)
+            ):
+                new_field = new_field[1:]
+                if not new_field:
+                    new_field = [ast.Expr(value=ast.Constant(value=...))]
+
+        _assert_ast_fields_match(old, new, old_field, new_field)
+
+
+def _assert_ast_fields_match(
+    old_container: ast.AST, new_container: ast.AST, old_value: object, new_value: object
+) -> None:
+    match (old_value, new_value):
+        case (list(), list()):
+            if len(old_value) != len(new_value):
+                raise _make_safety_error(
+                    old_container,
+                    new_container,
+                    len(old_value),
+                    len(new_value),
+                    "AST node lists differ in length",
+                )
+            for old_item, new_item in zip(old_value, new_value):
+                _assert_ast_fields_match(
+                    old_container, new_container, old_item, new_item
+                )
+        case (
+            float() | int() | str() | bytes() | complex() | None | types.EllipsisType(),
+            float() | int() | str() | bytes() | complex() | None | types.EllipsisType(),
+        ):
+            if type(old_value) is not type(new_value):
+                raise _make_safety_error(
+                    old_container,
+                    new_container,
+                    type(old_value).__name__,
+                    type(new_value).__name__,
+                    "AST node types differ",
+                )
+            if old_value != new_value:
+                raise _make_safety_error(
+                    old_container,
+                    new_container,
+                    old_value,
+                    new_value,
+                    "AST node values differ",
+                )
+        case (ast.AST(), ast.AST()):
+            assert_asts_match(old_value, new_value)
+        case (_, _):
+            raise _make_safety_error(
+                old_container,
+                new_container,
+                type(old_value).__name__,
+                type(new_value).__name__,
+                "AST node values differ in type",
+            )
+
+
 def check_no_destructive_changes(path: Path, previous_stub: str, new_stub: str) -> None:
     """Check that the new stub does not contain any destructive changes."""
     previous_ast = ast.parse(previous_stub)
@@ -406,6 +503,13 @@ def check_no_destructive_changes(path: Path, previous_stub: str, new_stub: str) 
         new_checker.visit(new_ast)
     except Exception:
         message = f"\nERROR: new stub file at {path} cannot be parsed/visited\n"
+        print(colored(message, "red"))
+        raise
+
+    try:
+        assert_asts_match(previous_ast, new_ast)
+    except RuntimeError as e:
+        message = f"\nERROR: new stub file at {path} has destructive changes:\n{e}\n"
         print(colored(message, "red"))
         raise
 
