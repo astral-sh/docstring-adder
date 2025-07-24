@@ -333,7 +333,7 @@ def get_runtime_object_for_stub(
 
 def add_docstrings_to_stub(
     module_name: str,
-    context: typeshed_client.finder.SearchContext,
+    context: typeshed_client.SearchContext,
     blacklisted_objects: frozenset[str],
 ) -> None:
     """Add docstrings a stub module and all functions/classes in it."""
@@ -517,7 +517,7 @@ def main() -> None:
         chain.from_iterable(load_blacklist(Path(path)) for path in args.blacklists)
     )
     stdlib_blacklist = combined_blacklist | STDLIB_OBJECT_BLACKLIST
-    context = typeshed_client.finder.get_search_context(
+    context = typeshed_client.get_search_context(
         typeshed=stdlib_path, search_path=package_paths, version=sys.version_info[:2]
     )
     for module, path in typeshed_client.get_all_stub_files(context):
