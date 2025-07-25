@@ -379,47 +379,40 @@ def add_docstrings_to_stub(
 def _make_safety_error(
     old: ast.AST, new: ast.AST, old_value: object, new_value: object, message: str
 ) -> RuntimeError:
-    old_explanation = f" (at line {old.lineno})" if hasattr(old, "lineno") else ""
-    new_explanation = f" (at line {new.lineno})" if hasattr(new, "lineno") else ""
+    def explain(node: ast.AST) -> str:
+        return f" (at line {node.lineno})" if hasattr(node, "lineno") else ""
+
     raise RuntimeError(
-        f"{message}: {old_value}{old_explanation} != {new_value}{new_explanation}"
+        f"{message}: {old_value}{explain(old)} != {new_value}{explain(new)}"
     )
 
 
 def assert_asts_match(old: ast.AST, new: ast.AST) -> None:
     """Check that two ASTs are equivalent, except for changes we choose to ignore.
 
-    Raises RuntimeError if the ASTs are not equivalent.
+    This approach is inspired by Black's AST safety check,
+    found in https://github.com/psf/black/blob/f4926ace179123942d5713a11196e4a4afae1d2b/src/black/parsing.py.
+
+    `RuntimeError` is raised if the ASTs are not equivalent.
     """
     if type(old) is not type(new):
         raise _make_safety_error(
             old, new, type(old).__name__, type(new).__name__, "AST node types differ"
         )
-    for field in old._fields:
-        old_field = getattr(old, field)
-        new_field = getattr(new, field)
-        if field == "body" and isinstance(
-            old, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+    for field_name, old_field in ast.iter_fields(old):
+        new_field = getattr(new, field_name)
+        # Allow a new body with just a docstring to be equivalent to a pre-existing body with just "..."
+        if (
+            field_name == "body"
+            and isinstance(old, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and new_field
+            and isinstance(new_field[0], ast.Expr)
+            and isinstance(new_field[0].value, ast.Constant)
+            and isinstance(new_field[0].value.value, str)
         ):
-            # Allow a body with just a docstring to be equivalent to one with just "..."
-            if (
-                old_field
-                and isinstance(old_field[0], ast.Expr)
-                and isinstance(old_field[0].value, ast.Constant)
-                and isinstance(old_field[0].value.value, str)
-            ):
-                old_field = old_field[1:]
-                if not old_field:
-                    old_field = [ast.Expr(value=ast.Constant(value=...))]
-            if (
-                new_field
-                and isinstance(new_field[0], ast.Expr)
-                and isinstance(new_field[0].value, ast.Constant)
-                and isinstance(new_field[0].value.value, str)
-            ):
-                new_field = new_field[1:]
-                if not new_field:
-                    new_field = [ast.Expr(value=ast.Constant(value=...))]
+            new_field = new_field[1:]
+            if not new_field:
+                new_field = [ast.Expr(value=ast.Constant(value=...))]
 
         _assert_ast_fields_match(old, new, old_field, new_field)
 
