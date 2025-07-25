@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import collections
 import contextlib
 import importlib
 import inspect
@@ -377,23 +376,6 @@ def add_docstrings_to_stub(
     )
 
 
-class SanityChecker(ast.NodeVisitor):
-    def __init__(self) -> None:
-        self.names: collections.Counter[str] = collections.Counter()
-
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        self.names[node.name] += 1
-        self.generic_visit(node)
-
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-        self.names[node.name] += 1
-        self.generic_visit(node)
-
-    def visit_ClassDef(self, node: ast.ClassDef) -> None:
-        self.names[node.name] += 1
-        self.generic_visit(node)
-
-
 def _make_safety_error(
     old: ast.AST, new: ast.AST, old_value: object, new_value: object, message: str
 ) -> RuntimeError:
@@ -491,13 +473,9 @@ def _assert_ast_fields_match(
 def check_no_destructive_changes(path: Path, previous_stub: str, new_stub: str) -> None:
     """Check that the new stub does not contain any destructive changes."""
     previous_ast = ast.parse(previous_stub)
-    previous_checker = SanityChecker()
-    previous_checker.visit(previous_ast)
 
     try:
         new_ast = ast.parse(new_stub)
-        new_checker = SanityChecker()
-        new_checker.visit(new_ast)
     except Exception:
         message = f"\nERROR: new stub file at {path} cannot be parsed/visited\n"
         print(colored(message, "red"))
@@ -505,14 +483,10 @@ def check_no_destructive_changes(path: Path, previous_stub: str, new_stub: str) 
 
     try:
         assert_asts_match(previous_ast, new_ast)
-    except RuntimeError as e:
-        message = f"\nERROR: new stub file at {path} has destructive changes:\n{e}\n"
+    except RuntimeError:
+        message = f"\nERROR: new stub file at {path} has destructive changes\n"
         print(colored(message, "red"))
         raise
-
-    assert previous_checker.names == new_checker.names, (
-        f"Destructive changes appear to have been made to {path}"
-    )
 
 
 def install_typeshed_packages(typeshed_paths: Sequence[Path]) -> None:
