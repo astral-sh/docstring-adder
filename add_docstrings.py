@@ -622,12 +622,6 @@ def main() -> None:
         ),
         default=(),
     )
-    parser.add_argument(
-        "-z",
-        "--exit-zero",
-        action="store_true",
-        help="Exit with code 0 even if there were errors.",
-    )
     args = parser.parse_args()
 
     stdlib_path = Path(args.stdlib_path) if args.stdlib_path else None
