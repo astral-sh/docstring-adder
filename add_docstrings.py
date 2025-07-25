@@ -409,10 +409,18 @@ def assert_asts_match(old: ast.AST, new: ast.AST) -> None:
         if (
             field_name == "body"
             and isinstance(old, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            # There is a docstring in the new node...
             and new_field
             and isinstance(new_field[0], ast.Expr)
             and isinstance(new_field[0].value, ast.Constant)
             and isinstance(new_field[0].value.value, str)
+            # ... and there wasn't one in the old node
+            and not (
+                old_field
+                and isinstance(old_field[0], ast.Expr)
+                and isinstance(old_field[0].value, ast.Constant)
+                and isinstance(old_field[0].value.value, str)
+            )
         ):
             new_field = new_field[1:]
             if not new_field:
