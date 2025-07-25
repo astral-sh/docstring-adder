@@ -442,7 +442,7 @@ def assert_asts_match(old: ast.AST, new: ast.AST) -> None:
         _assert_ast_fields_match(old, new, old_field, new_field)
 
 
-_SCALAR_TYPES = (float, int, str, bytes, complex, type(None), types.EllipsisType)
+_SCALAR_TYPES = (float, int, str, bytes, complex, type(None), type(...))
 
 
 def _assert_ast_fields_match(
