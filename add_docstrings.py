@@ -399,7 +399,11 @@ def assert_asts_match(old: ast.AST, new: ast.AST) -> None:
         raise _make_safety_error(
             old, new, type(old).__name__, type(new).__name__, "AST node types differ"
         )
-    for field_name, old_field in ast.iter_fields(old):
+    # We don't use ast.iter_fields() here because it ignores fields that don't exist on the node,
+    # so if we use it we could theoretically miss discrepancies where an attribute exists on new
+    # but not old.
+    for field_name in old._fields:
+        old_field = getattr(old, field_name)
         new_field = getattr(new, field_name)
         # Allow a new body with just a docstring to be equivalent to a pre-existing body with just "..."
         if (
