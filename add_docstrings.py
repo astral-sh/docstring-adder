@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import collections
 import contextlib
 import importlib
 import inspect
@@ -410,41 +409,122 @@ def add_docstrings_to_stub(
     )
 
 
-class SanityChecker(ast.NodeVisitor):
-    def __init__(self) -> None:
-        self.names: collections.Counter[str] = collections.Counter()
+def _make_safety_error(
+    old: ast.AST, new: ast.AST, old_value: object, new_value: object, message: str
+) -> RuntimeError:
+    def explain(node: ast.AST) -> str:
+        return f" (at line {node.lineno})" if hasattr(node, "lineno") else ""
 
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        self.names[node.name] += 1
-        self.generic_visit(node)
+    raise RuntimeError(
+        f"{message}: {old_value}{explain(old)} != {new_value}{explain(new)}"
+    )
 
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-        self.names[node.name] += 1
-        self.generic_visit(node)
 
-    def visit_ClassDef(self, node: ast.ClassDef) -> None:
-        self.names[node.name] += 1
-        self.generic_visit(node)
+def assert_asts_match(old: ast.AST, new: ast.AST) -> None:
+    """Check that two ASTs are equivalent, except for changes we choose to ignore.
+
+    This approach is inspired by Black's AST safety check,
+    found in https://github.com/psf/black/blob/f4926ace179123942d5713a11196e4a4afae1d2b/src/black/parsing.py.
+
+    `RuntimeError` is raised if the ASTs are not equivalent.
+    """
+    if type(old) is not type(new):
+        raise _make_safety_error(
+            old, new, type(old).__name__, type(new).__name__, "AST node types differ"
+        )
+    # We don't use ast.iter_fields() here because it ignores fields that don't exist on the node,
+    # so if we use it we could theoretically miss discrepancies where an attribute exists on new
+    # but not old.
+    for field_name in old._fields:
+        old_field = getattr(old, field_name)
+        new_field = getattr(new, field_name)
+        # Allow a new body with just a docstring to be equivalent to a pre-existing body with just "..."
+        if (
+            field_name == "body"
+            and isinstance(old, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            # There is a docstring in the new node...
+            and new_field
+            and isinstance(new_field[0], ast.Expr)
+            and isinstance(new_field[0].value, ast.Constant)
+            and isinstance(new_field[0].value.value, str)
+            # ... and there wasn't one in the old node
+            and not (
+                old_field
+                and isinstance(old_field[0], ast.Expr)
+                and isinstance(old_field[0].value, ast.Constant)
+                and isinstance(old_field[0].value.value, str)
+            )
+        ):
+            new_field = new_field[1:]
+            if not new_field:
+                new_field = [ast.Expr(value=ast.Constant(value=...))]
+
+        _assert_ast_fields_match(old, new, old_field, new_field)
+
+
+_SCALAR_TYPES = (float, int, str, bytes, complex, type(None), type(...))
+
+
+def _assert_ast_fields_match(
+    old_container: ast.AST, new_container: ast.AST, old_value: object, new_value: object
+) -> None:
+    if isinstance(old_value, list) and isinstance(new_value, list):
+        if len(old_value) != len(new_value):
+            raise _make_safety_error(
+                old_container,
+                new_container,
+                len(old_value),
+                len(new_value),
+                "AST node lists differ in length",
+            )
+        for old_item, new_item in zip(old_value, new_value):
+            _assert_ast_fields_match(old_container, new_container, old_item, new_item)
+    elif isinstance(old_value, _SCALAR_TYPES) and isinstance(new_value, _SCALAR_TYPES):
+        if type(old_value) is not type(new_value):
+            raise _make_safety_error(
+                old_container,
+                new_container,
+                type(old_value).__name__,
+                type(new_value).__name__,
+                "AST node types differ",
+            )
+        if old_value != new_value:
+            raise _make_safety_error(
+                old_container,
+                new_container,
+                old_value,
+                new_value,
+                "AST node values differ",
+            )
+    elif isinstance(old_value, ast.AST) and isinstance(new_value, ast.AST):
+        assert_asts_match(old_value, new_value)
+    else:
+        raise _make_safety_error(
+            old_container,
+            new_container,
+            type(old_value).__name__,
+            type(new_value).__name__,
+            "AST node values differ in type",
+        )
 
 
 def check_no_destructive_changes(path: Path, previous_stub: str, new_stub: str) -> None:
     """Check that the new stub does not contain any destructive changes."""
     previous_ast = ast.parse(previous_stub)
-    previous_checker = SanityChecker()
-    previous_checker.visit(previous_ast)
 
     try:
         new_ast = ast.parse(new_stub)
-        new_checker = SanityChecker()
-        new_checker.visit(new_ast)
     except Exception:
         message = f"\nERROR: new stub file at {path} cannot be parsed/visited\n"
         print(colored(message, "red"))
         raise
 
-    assert previous_checker.names == new_checker.names, (
-        f"Destructive changes appear to have been made to {path}"
-    )
+    try:
+        assert_asts_match(previous_ast, new_ast)
+    except RuntimeError:
+        message = f"\nERROR: new stub file at {path} has destructive changes\n"
+        print(colored(message, "red"))
+        raise
 
 
 def install_typeshed_packages(typeshed_paths: Sequence[Path]) -> None:
