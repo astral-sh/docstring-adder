@@ -442,53 +442,50 @@ def assert_asts_match(old: ast.AST, new: ast.AST) -> None:
         _assert_ast_fields_match(old, new, old_field, new_field)
 
 
+_SCALAR_TYPES = (float, int, str, bytes, complex, type(None), types.EllipsisType)
+
+
 def _assert_ast_fields_match(
     old_container: ast.AST, new_container: ast.AST, old_value: object, new_value: object
 ) -> None:
-    match (old_value, new_value):
-        case (list(), list()):
-            if len(old_value) != len(new_value):
-                raise _make_safety_error(
-                    old_container,
-                    new_container,
-                    len(old_value),
-                    len(new_value),
-                    "AST node lists differ in length",
-                )
-            for old_item, new_item in zip(old_value, new_value):
-                _assert_ast_fields_match(
-                    old_container, new_container, old_item, new_item
-                )
-        case (
-            float() | int() | str() | bytes() | complex() | None | types.EllipsisType(),
-            float() | int() | str() | bytes() | complex() | None | types.EllipsisType(),
-        ):
-            if type(old_value) is not type(new_value):
-                raise _make_safety_error(
-                    old_container,
-                    new_container,
-                    type(old_value).__name__,
-                    type(new_value).__name__,
-                    "AST node types differ",
-                )
-            if old_value != new_value:
-                raise _make_safety_error(
-                    old_container,
-                    new_container,
-                    old_value,
-                    new_value,
-                    "AST node values differ",
-                )
-        case (ast.AST(), ast.AST()):
-            assert_asts_match(old_value, new_value)
-        case (_, _):
+    if isinstance(old_value, list) and isinstance(new_value, list):
+        if len(old_value) != len(new_value):
+            raise _make_safety_error(
+                old_container,
+                new_container,
+                len(old_value),
+                len(new_value),
+                "AST node lists differ in length",
+            )
+        for old_item, new_item in zip(old_value, new_value):
+            _assert_ast_fields_match(old_container, new_container, old_item, new_item)
+    elif isinstance(old_value, _SCALAR_TYPES) and isinstance(new_value, _SCALAR_TYPES):
+        if type(old_value) is not type(new_value):
             raise _make_safety_error(
                 old_container,
                 new_container,
                 type(old_value).__name__,
                 type(new_value).__name__,
-                "AST node values differ in type",
+                "AST node types differ",
             )
+        if old_value != new_value:
+            raise _make_safety_error(
+                old_container,
+                new_container,
+                old_value,
+                new_value,
+                "AST node values differ",
+            )
+    elif isinstance(old_value, ast.AST) and isinstance(new_value, ast.AST):
+        assert_asts_match(old_value, new_value)
+    else:
+        raise _make_safety_error(
+            old_container,
+            new_container,
+            type(old_value).__name__,
+            type(new_value).__name__,
+            "AST node values differ in type",
+        )
 
 
 def check_no_destructive_changes(path: Path, previous_stub: str, new_stub: str) -> None:
