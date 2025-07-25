@@ -34,14 +34,25 @@ SuiteT = TypeVar("SuiteT", libcst.Module, libcst.IndentedBlock)
 
 
 def triple_quoted_docstring(content: str) -> str:
-    content = content.replace("\\", "\\\\")
-    triple_quote = "'''" if '"""' in content else '"""'
+    """Escape the docstring and return it as a triple-quoted string.
 
-    docstring = triple_quote + "".join(
-        char if char.isprintable() or char.isspace() else repr(char) for char in content
-    )
+    Logic adapted from `ast.unparse()` internals.
+    See https://github.com/python/cpython/blob/9a6b60af409d02468b935c569a4f49e88c399c4e/Lib/_ast_unparse.py#L532-L568
+    """
 
-    # For a single-line docstring, this can result in funny things like:
+    def escape_char(c: str) -> str:
+        # \n and \t are non-printable but we wouldn't want them to be escaped.
+        if c.isspace():
+            return c
+        # Always escape backslashes and other non-printable characters
+        if c == "\\" or not c.isprintable():
+            return c.encode("unicode_escape").decode("ascii")
+        return c
+
+    # In general we try to tamper with the content as little as possible,
+    # but this generally leads to more consistent and more readable docstrings.
+    #
+    # For a single-line docstring, this *can* result in funny things like:
     #
     # ```py
     # def foo():
@@ -55,10 +66,28 @@ def triple_quoted_docstring(content: str) -> str:
     # def foo():
     #     """A docstring."""
     # ```
-    if not docstring.strip(" \t").endswith("\n"):
-        docstring += "\n"
+    if not content.rstrip(" \t").endswith("\n"):
+        content += "\n"
 
-    return docstring + triple_quote
+    escaped_string = "".join(map(escape_char, content))
+
+    quotes = ['"""', "'''"]
+    possible_quotes = [q for q in quotes if q not in escaped_string]
+
+    if not possible_quotes:
+        string = repr(content)
+        quote = next((q for q in quotes if string[0] in q), string[0])
+        return f"{quote}{string[1:-1]}{quote}"
+
+    # Sort so that we prefer '''"''' over """\""""
+    possible_quotes.sort(key=lambda q: q[0] == escaped_string[-1])
+    quote = possible_quotes[0]
+
+    # Escape the final quote, if necessary
+    if quote == escaped_string[-1]:
+        escaped_string = escaped_string[:-1] + "\\" + escaped_string[-1]
+
+    return f"{quote}{escaped_string}{quote}"
 
 
 @dataclass
