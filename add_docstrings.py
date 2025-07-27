@@ -104,6 +104,7 @@ from typing import NamedTuple, TypeVar
 import libcst
 import tomli
 import typeshed_client
+from rich_argparse import RawDescriptionRichHelpFormatter
 from termcolor import colored
 from typing_extensions import override
 
@@ -819,7 +820,9 @@ def load_blacklist(path: Path) -> frozenset[str]:
 
 
 def _main() -> None:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=RawDescriptionRichHelpFormatter
+    )
     parser.add_argument(
         "-s",
         "--stdlib-path",

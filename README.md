@@ -9,3 +9,17 @@
 ##
 
 ### A codemod to auto-add docstrings to stub files
+
+</div>
+
+---
+
+It's easiest to use this tool using [uv](https://docs.astral.sh/uv/).
+
+Either install the tool using `uv tool install git+https://github.com/astral-sh/docstring-adder`
+and then invoke it using the `add-docstrings` command, or invoke it directly using
+`uvx --from=git+https://github.com/astral-sh/docstring-adder add-docstrings`.
+
+Consult the module-level docstring in `add_docstrings.py` for more details on how the tool works.
+Run `uvx --from=git+https://github.com/astral-sh/docstring-adder add-docstrings --help` for
+information on the various CLI options the tool supports.
