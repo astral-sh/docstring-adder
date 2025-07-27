@@ -24,7 +24,8 @@ docstring-adder will do the following:
          the docstring is added to the class/function definition in the stub file.
    e. The modified stub file is written back to disk.
    f. An AST safety check is performed to ensure that the modified stub file
-      is still valid, using an AST safety check similar to the one used by Black.
+      is still valid. It checks that the ASTs before and after docstring_adder's changes
+      are identical, except for line numbers and added docstrings.
       If the modified stub file is not valid, an exception is raised.
       This is done after writing the modified stub file to disk
       so that it is possible to inspect the incorrect changes docstring-adder made.
@@ -51,7 +52,7 @@ Some miscellaneous details:
   to definitions inside `if sys.version_info >= (3, 10)` branches. Fundamentally, the tool
   can only accurately add docstrings to definitions that exist at runtime on the Python
   version and platform the tool is run on, since docstrings are retrieved by dynamically
-  inspect the runtime module that corresponds to the stub.
+  inspecting the runtime module that corresponds to the stub.
 
   docstring-adder is not capable of type inference; whether or not these `if` tests
   evaluate to `True` is evaluated syntactically using APIs from `typeshed_client`.
