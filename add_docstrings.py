@@ -30,7 +30,6 @@ def log(*objects: object) -> None:
 
 
 DocumentableT = TypeVar("DocumentableT", libcst.ClassDef, libcst.FunctionDef)
-SuiteT = TypeVar("SuiteT", libcst.Module, libcst.IndentedBlock)
 
 
 def triple_quoted_docstring(content: str) -> str:
