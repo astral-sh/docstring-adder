@@ -323,7 +323,7 @@ class DocstringAdder(libcst.CSTTransformer):
         For example, given the name `method`, if we are visiting a class `Foo`
         inside a class `Bar` inside a module `spam`, this will return `spam.Bar.Foo.method`.
 
-        If the name is mangled, it will be mangled according to the current class
+        If the name starts with `__`, it will be mangled according to the current class
         namespace: if we were given the name `__method`, we would instead return
         `spam.Bar.Foo._Foo__method`.
         """
