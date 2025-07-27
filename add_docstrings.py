@@ -394,7 +394,7 @@ class DocstringAdder(libcst.CSTTransformer):
         transformer so that we avoid making the undesirable changes in
         the first place, rather than applying the undesirable changes and
         then discarding them later on. This approach seems to work well
-        enough for now, however.
+        enough for now, however, and is simpler.
         """
         condition_as_libcst_module = libcst.Module(
             body=[
