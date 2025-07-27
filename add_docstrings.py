@@ -22,6 +22,7 @@ import libcst
 import tomli
 import typeshed_client
 from termcolor import colored
+from typing_extensions import override
 
 
 def log(*objects: object) -> None:
@@ -121,6 +122,16 @@ class DocstringAdder(libcst.CSTTransformer):
         )
         self.blacklisted_objects: frozenset[str] = blacklisted_objects
 
+        # A stack of sets. Each set corresponds to an `IndentedBlock` libcst node.
+        # For each nested `IndentedBlock`, we keep track of the names of functions
+        # that we've already visited (and, possibly, added docstrings to).
+        #
+        # We start off with a single empty set, which corresponds to the module-level
+        # namespace. The module-level namespace is not represented by an `IndentedBlock`
+        # in libcst's CST, but for our purposes we treat the module-level namespace
+        # just like any indented block.
+        self.suite_visitation_stack: list[set[str]] = [set()]
+
     def maybe_mangled_name(self, name: str) -> str:
         parent = self.runtime_parents[-1]
         if not isinstance(parent.value, type):
@@ -131,6 +142,7 @@ class DocstringAdder(libcst.CSTTransformer):
 
         return name
 
+    @override
     def visit_ClassDef(self, node: libcst.ClassDef) -> None:
         runtime_object = get_runtime_object_for_stub(
             runtime_parent=self.runtime_parents[-1],
@@ -143,6 +155,7 @@ class DocstringAdder(libcst.CSTTransformer):
             RuntimeParent(name=node.name.value, value=runtime_object)
         )
 
+    @override
     def leave_ClassDef(
         self, original_node: libcst.ClassDef, updated_node: libcst.ClassDef
     ) -> libcst.ClassDef:
@@ -162,54 +175,47 @@ class DocstringAdder(libcst.CSTTransformer):
     def log_runtime_object_not_found(self, name: str) -> None:
         log(f"Could not find {self.object_fullname(name)} at runtime")
 
+    @override
     def leave_FunctionDef(
         self, original_node: libcst.FunctionDef, updated_node: libcst.FunctionDef
     ) -> libcst.FunctionDef:
+        # If there are multiple functions with the same name in an indented block,
+        # it's probably an overloaded function or the `@setter` for a property.
+        # Only add a docstring for the first definition.
+        if original_node.name.value in self.suite_visitation_stack[-1]:
+            return original_node
+        self.suite_visitation_stack[-1].add(original_node.name.value)
+
         runtime_parent = self.runtime_parents[-1]
+
         if runtime_parent.value.is_not_found():
             return original_node
+
         runtime_object = get_runtime_object_for_stub(
             runtime_parent=runtime_parent,
             name=self.maybe_mangled_name(updated_node.name.value),
         )
+
         if runtime_object is None:
             self.log_runtime_object_not_found(updated_node.name.value)
             return original_node
+
         return self.document_class_or_function(
             updated_node=updated_node, runtime_object=runtime_object
         )
 
-    def _leave_Suite(self, original_node: SuiteT, updated_node: SuiteT) -> SuiteT:
-        assert len(original_node.body) == len(updated_node.body)
+    @override
+    def visit_IndentedBlock(self, node: libcst.IndentedBlock) -> None:
+        self.suite_visitation_stack.append(set())
 
-        body: list[libcst.BaseStatement] = []
-        seen: set[str] = set()
-
-        for original, updated in zip(original_node.body, updated_node.body):
-            if not isinstance(updated, libcst.FunctionDef):
-                body.append(updated)
-                continue
-            # If there are multiple functions with the same name in an indented block,
-            # it's probably an overloaded function or the `@setter` for a property.
-            # Only add a docstring for the first definition.
-            if updated.name.value in seen:
-                body.append(original)
-                continue
-            seen.add(updated.name.value)
-            body.append(updated)
-
-        return updated_node.with_changes(body=body)
-
+    @override
     def leave_IndentedBlock(
         self, original_node: libcst.IndentedBlock, updated_node: libcst.IndentedBlock
     ) -> libcst.IndentedBlock:
-        return self._leave_Suite(original_node, updated_node)
+        self.suite_visitation_stack.pop()
+        return updated_node
 
-    def leave_Module(
-        self, original_node: libcst.Module, updated_node: libcst.Module
-    ) -> libcst.Module:
-        return self._leave_Suite(original_node, updated_node)
-
+    @override
     def leave_If(self, original_node: libcst.If, updated_node: libcst.If) -> libcst.If:
         condition_as_libcst_module = libcst.Module(
             body=[
