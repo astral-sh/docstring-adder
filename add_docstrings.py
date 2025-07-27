@@ -24,24 +24,23 @@ docstring-adder will do the following:
          the docstring is added to the class/function definition in the stub file.
    e. The modified stub file is written back to disk.
    f. An AST safety check is performed to ensure that the modified stub file
-      is still valid. It checks that the ASTs before and after docstring_adder's changes
-      are identical, except for line numbers and added docstrings.
+      is still valid. It checks that the ASTs before and after docstring_adder's
+      changes are identical, except for line numbers and added docstrings.
       If the modified stub file is not valid, an exception is raised.
-      This is done after writing the modified stub file to disk
-      so that it is possible to inspect the incorrect changes docstring-adder made.
+      This is done after writing the modified stub file to disk so that it is
+      possible to inspect the incorrect changes docstring-adder made.
 
 Some miscellaneous details:
-- The tool should be idempotent. It should add docstrings where possible, but it should never
-  remove or alter docstrings that were already present in the stub file.
+- The tool should be idempotent. It should add docstrings where possible, but it should
+  never remove or alter docstrings that were already present in the stub file.
 - Because it is a libcst-based codemod, it should not make spurious changes to
   formatting or comments in the stub file. `type: ignore` comments should be preserved;
   mypy and other type checkers should still be able to type-check the stub file after
   docstring-adder has run.
 - Nested namespaces are supported: docstring-adder is capable of adding a docstring
-  to a function definition inside a class (a method definition),
-  a class definition inside a class, or even a function definition inside a class
-  definition inside a class definition. Docstrings can even be added to name-mangled
-  methods.
+  to a function definition inside a class (a method definition), a class definition
+  inside a class, or even a function definition inside a class definition inside a
+  class definition. Docstrings can even be added to name-mangled methods.
 - docstring-adder skips adding a docstring to a method definition if the method docstring
   at runtime is exactly the same as the docstring of the corresponding method on `object`.
   This is to avoid adding a lot of boilerplate docstrings that are not useful.
@@ -388,8 +387,14 @@ class DocstringAdder(libcst.CSTTransformer):
         made to branches of code that are unreachable on the platform
         and Python version docstring-adder is being run on.
 
-        See the module-level docstring for why we do this,
-        and caveats regarding how we evaluate the truthiness of the `if` test.
+        See the module-level docstring for why we do this, and caveats
+        regarding how we evaluate the truthiness of the `if` test.
+
+        It might theoretically be possible to add more state to the
+        transformer so that we avoid making the undesirable changes in
+        the first place, rather than applying the undesirable changes and
+        then discarding them later on. This approach seems to work well
+        enough for now, however.
         """
         condition_as_libcst_module = libcst.Module(
             body=[
@@ -485,7 +490,7 @@ class DocstringAdder(libcst.CSTTransformer):
 def get_runtime_docstring(runtime: RuntimeValue) -> str | None:
     """Attempt to retrieve the docstring for a given runtime object.
 
-    We attempt to "tamper" with the docstring as little as possible after
+    We try to "tamper" with the docstring as little as possible after
     retrieving it. For example, we don't use `inspect.cleandoc()` here:
     the changes it makes are mostly unnecessary given that we apply
     autoformatting to stub files after docstring-adder has run, and it
@@ -494,8 +499,14 @@ def get_runtime_docstring(runtime: RuntimeValue) -> str | None:
     runtime_object = runtime.inner
 
     try:
-        # Don't use `inspect.getdoc()` here: it returns the docstring from superclasses
-        # if the docstring has not been overridden on a subclass, and that's not what we want.
+        # Don't use `inspect.getdoc()` here.
+        #
+        # If you call `inspect.getdoc(Foo.bar)`, where `Foo.bar` does not have a docstring,
+        # but `Foo` inherits from `Spam` and `Spam.bar` *does* have a docstring,
+        # `inspect.getdoc()` will return the docstring from `Spam.bar`.
+        #
+        # That's not what we want here: if the overridden method does not have a docstring in
+        # the source code at runtime, we shouldn't add one in the stub file either.
         runtime_docstring = runtime_object.__doc__
     except Exception:
         return None
