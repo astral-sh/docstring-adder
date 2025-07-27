@@ -42,7 +42,7 @@ classifiers = [
 "Bug Tracker" = "https://github.com/AlexWaygood/docstring-adder/issues"
 
 [project.scripts]
-add-docstrings = "add_docstrings:main"
+add-docstrings = "add_docstrings:_main"
 
 [tool.hatch.build.targets.wheel]
 include = ["add_docstrings.py"]
@@ -78,6 +78,7 @@ select = [
     "ARG",
     "B",
     "B9",
+    "D",
     "E",
     "EXE",
     "F",
@@ -95,6 +96,9 @@ select = [
     "PLW1510",
 ]
 ignore = [
+    # Unnecessarily strict/pedantic
+    "D107",
+    "D202",
     # These are all enforced by, or incompatible with, the ruff formatter:
     "E203",
     "E501",
