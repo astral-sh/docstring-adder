@@ -1,0 +1,57 @@
+name: typeshed_primer
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  typeshed_primer:
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout docstring-adder on target branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.base_ref }}
+          path: old_codemod
+      - name: Checkout docstring-adder on PR branch
+        uses: actions/checkout@v4
+        with:
+          path: new_codemod
+      - name: Checkout typeshed
+        uses: actions/checkout@v4
+        with:
+          repository: python/typeshed
+          path: typeshed
+      - uses: astral-sh/setup-uv@v6
+      - run: uv python pin 3.13
+      - name: Setup git
+        run: |
+          git config --global user.name stubdefaulter
+          git config --global user.email ''
+      - name: Codemod typeshed using target branch
+        run: |
+          uvx --from=./old_codemod add-docstrings --stdlib-path ./typeshed/stdlib
+          git -C typeshed commit -a -m "With old stubdefaulter"
+      - name: Codemod typeshed using PR branch
+        run: |
+          git -C typeshed checkout HEAD~1 -- stdlib
+          git -C typeshed restore --staged stdlib
+          uvx --from=./new_codemod add-docstrings --stdlib-path ./typeshed/stdlib
+      - name: Get the diff between the two docstring-adder runs
+        run: git -C typeshed diff | tee ./docstring-adder-diff.txt
+      - name: Save PR number
+        run: echo ${{ github.event.pull_request.number }} | tee pr_number.txt
+      - name: Upload diff and PR number
+        uses: actions/upload-artifact@v4
+        with:
+          name: docstring-adder-diff
+          path: |
+            docstring-adder-diff.txt
+            pr_number.txt
