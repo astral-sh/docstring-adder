@@ -604,15 +604,13 @@ def get_runtime_object_for_stub(
 
 def add_docstrings_to_stub(
     module_name: str,
+    path: Path,
     context: typeshed_client.SearchContext,
     blacklisted_objects: frozenset[str],
 ) -> None:
     """Add docstrings to a stub module and all functions/classes in it."""
 
     print(f"Processing {module_name}... ", flush=True)
-    path = typeshed_client.get_stub_file(module_name, search_context=context)
-    if path is None:
-        raise ValueError(f"Could not find stub for {module_name}")
     try:
         # Redirect stdout when importing modules to avoid noisy output from modules like `this`
         with contextlib.redirect_stdout(io.StringIO()):
@@ -900,6 +898,9 @@ def _main() -> None:
     context = typeshed_client.get_search_context(
         typeshed=stdlib_path, search_path=package_paths, version=sys.version_info[:2]
     )
+
+    codemodded_stubs = 0
+
     for module, path in typeshed_client.get_all_stub_files(context):
         if stdlib_path is not None and path.is_relative_to(stdlib_path):
             if any(
@@ -909,11 +910,20 @@ def _main() -> None:
                 log(f"Skipping {module}: blacklisted module")
                 continue
             else:
-                add_docstrings_to_stub(module, context, stdlib_blacklist)
+                add_docstrings_to_stub(module, path, context, stdlib_blacklist)
         elif any(path.is_relative_to(p) for p in package_paths):
-            add_docstrings_to_stub(module, context, combined_blacklist)
-    m = "\n--- Successfully completed the codemod ---"
-    print(colored(m, "green"))
+            add_docstrings_to_stub(module, path, context, combined_blacklist)
+        else:
+            continue
+        codemodded_stubs += 1
+
+    if codemodded_stubs == 0:
+        m = "\n--- WARNING: Didn't find any stubs to codemod for the passed packages ---"
+        print(colored(m, "red"))
+    else:
+        m = "\n--- Successfully completed the codemod ---"
+        print(colored(m, "green"))
+
     sys.exit(0)
 
 

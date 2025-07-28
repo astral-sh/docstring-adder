@@ -15,7 +15,7 @@ dependencies = [
     "rich-argparse>=1.7.0",
     "termcolor>=3.1.0",
     "tomli>=2.2.1",
-    "typeshed-client @ git+https://github.com/JelleZijlstra/typeshed_client@dc933baf47b3df4bbaf4e3f2d6a1fe238e6c7c68",
+    "typeshed-client @ git+https://github.com/JelleZijlstra/typeshed_client@b79099fe36db977abbb1f3d6466a7657ae3edcfd",
     # So that we can add docs for `typing_extensions` APIs:
     "typing_extensions",
     # for dynamically installing typeshed packages
