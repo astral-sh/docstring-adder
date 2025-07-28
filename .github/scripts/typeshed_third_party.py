@@ -9,7 +9,9 @@ from pathlib import Path
 def add_docstrings(typeshed_dir: Path, docstring_adder_dir: Path) -> None:
     """Add docstrings to third-party typeshed stubs."""
 
-    for path in (typeshed_dir / "stubs").iterdir():
+    packages = list((typeshed_dir / "stubs").iterdir())
+    for i, path in enumerate((typeshed_dir / "stubs").iterdir(), start=1):
+        print(f"\nCodemodding package [{i}/{len(packages)}]\n")
         with tempfile.TemporaryDirectory() as td:
             venv_dir = f"{td}-venv"
             subprocess.run(["uv", "venv", "--python", "3.13", venv_dir], check=True)

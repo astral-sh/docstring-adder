@@ -31,7 +31,7 @@ requires-dist = [
     { name = "rich-argparse", specifier = ">=1.7.0" },
     { name = "termcolor", specifier = ">=3.1.0" },
     { name = "tomli", specifier = ">=2.2.1" },
-    { name = "typeshed-client", git = "https://github.com/JelleZijlstra/typeshed_client?rev=b79099fe36db977abbb1f3d6466a7657ae3edcfd" },
+    { name = "typeshed-client", git = "https://github.com/JelleZijlstra/typeshed_client?rev=9d4b258bbad66421ee2d9ea8cf02768ffb782a1a" },
     { name = "typing-extensions" },
     { name = "uv" },
 ]
@@ -370,7 +370,7 @@ wheels = [
 [[package]]
 name = "typeshed-client"
 version = "2.8.2"
-source = { git = "https://github.com/JelleZijlstra/typeshed_client?rev=b79099fe36db977abbb1f3d6466a7657ae3edcfd#b79099fe36db977abbb1f3d6466a7657ae3edcfd" }
+source = { git = "https://github.com/JelleZijlstra/typeshed_client?rev=9d4b258bbad66421ee2d9ea8cf02768ffb782a1a#9d4b258bbad66421ee2d9ea8cf02768ffb782a1a" }
 dependencies = [
     { name = "importlib-resources" },
     { name = "typing-extensions" },
