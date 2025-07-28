@@ -32,6 +32,8 @@ stubs package, docstring-adder will do the following:
 Some miscellaneous details:
 - The tool should be idempotent. It should add docstrings where possible, but it should
   never remove or alter docstrings that were already present in the stub file.
+  Idempotency cannot be guaranteed, however, if importing the package at runtime causes
+  persistent changes to be made to your Python environment.
 - Because it is a libcst-based codemod, it should not make spurious changes to formatting
   or comments in the stub file. `type: ignore` comments should be preserved; mypy and
   other type checkers should still be able to type-check the stub file after
@@ -910,7 +912,7 @@ def _main() -> None:
                 add_docstrings_to_stub(module, context, stdlib_blacklist)
         elif any(path.is_relative_to(p) for p in package_paths):
             add_docstrings_to_stub(module, context, combined_blacklist)
-    m = "\n--- Successfully codemodded typeshed ---"
+    m = "\n--- Successfully completed the codemod ---"
     print(colored(m, "green"))
     sys.exit(0)
 
