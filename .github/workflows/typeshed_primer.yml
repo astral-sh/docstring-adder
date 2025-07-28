@@ -10,6 +10,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
+env:
+  FORCE_COLOR: 1
+  CLICOLOR_FORCE: 1 # recognized by uv
+
 jobs:
   typeshed_primer:
     timeout-minutes: 5
@@ -30,20 +34,21 @@ jobs:
           repository: python/typeshed
           path: typeshed
       - uses: astral-sh/setup-uv@v6
-      - run: uv python pin 3.13
       - name: Setup git
         run: |
           git config --global user.name stubdefaulter
           git config --global user.email ''
       - name: Codemod typeshed using target branch
         run: |
-          uvx --from=./old_codemod add-docstrings --stdlib-path ./typeshed/stdlib
+          uvx --python=3.13 --from=./old_codemod add-docstrings --stdlib-path ./typeshed/stdlib
+          uvx --python=3.9 --from=./old_codemod add-docstrings --stdlib-path ./typeshed/stdlib
           git -C typeshed commit -a -m "With old stubdefaulter"
       - name: Codemod typeshed using PR branch
         run: |
           git -C typeshed checkout HEAD~1 -- stdlib
           git -C typeshed restore --staged stdlib
-          uvx --from=./new_codemod add-docstrings --stdlib-path ./typeshed/stdlib
+          uvx --python=3.13 --from=./new_codemod add-docstrings --stdlib-path ./typeshed/stdlib
+          uvx --python=3.9 --from=./new_codemod add-docstrings --stdlib-path ./typeshed/stdlib
       - name: Get the diff between the two docstring-adder runs
         run: git -C typeshed diff | tee docstring-adder-diff.txt
       - name: Save PR number
