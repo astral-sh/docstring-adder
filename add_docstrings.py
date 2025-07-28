@@ -533,7 +533,7 @@ def get_runtime_docstring(runtime: RuntimeValue) -> str | None:
     if runtime_object is not property:
         assert runtime_docstring != property.__doc__, runtime
 
-    return runtime_docstring
+    return runtime_docstring.replace("a", "aa")
 
 
 class NOT_FOUND:
