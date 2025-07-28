@@ -918,13 +918,13 @@ def _main() -> None:
         codemodded_stubs += 1
 
     if codemodded_stubs == 0:
-        m = "\n--- WARNING: Didn't find any stubs to codemod for the passed packages ---"
+        m = "\n--- ERROR: Didn't find any stubs to codemod for the passed packages ---"
         print(colored(m, "red"))
+        sys.exit(1)
     else:
         m = "\n--- Successfully completed the codemod ---"
         print(colored(m, "green"))
-
-    sys.exit(0)
+        sys.exit(0)
 
 
 if __name__ == "__main__":
