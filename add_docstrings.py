@@ -1,54 +1,53 @@
 """Tool to add docstrings to stubs.
 
-The tool is a libcst-based codemod.
-Given a path to a typeshed `stdlib` or a stubs package,
-docstring-adder will do the following:
+The tool is a libcst-based codemod. Given a path to a typeshed `stdlib` directory or a
+stubs package, docstring-adder will do the following:
 
-1. Determine a set of all stub files in the directory
-   (using the `typeshed_client` library).
+1. Determine a set of all stub files in the directory (using the `typeshed_client`
+   library).
 2. For each stub file:
-   a. We extract the module name of the stub file,
-      again using the `typeshed_client` library.
-   b. We attempt to import the corresponding runtime module.
-      If the import fails, the failure is logged and the stub file is skipped;
-      if not, we proceed to step (2c).
+   a. We extract the module name of the stub file, again using the `typeshed_client`
+      library.
+   b. We attempt to import the corresponding runtime module. If the import fails, the
+      failure is logged and the stub file is skipped; if not, we proceed to the next
+      step.
    c. If the runtime module has a docstring, it is added to the stub file.
    d. For every class or function definition in the stub file:
-      i. If the class/function definition already has a docstring,
-         we skip it and move on to the next class/function definition.
-      ii. We attempt to locate the corresponding runtime object
-         by looking up the fullname of the class or function in the runtime module.
-         If the runtime object cannot be found, a warning is logged
-         and we skip to the next class or function definition.
-      iii. If the runtime object is found and it has a docstring,
-         the docstring is added to the class/function definition in the stub file.
+      i. If the class/function definition already has a docstring, we skip it and move on
+         to the next class/function definition. If not, we proceed to the next step.
+      ii. We attempt to locate the corresponding runtime object by looking up the
+         fullname of the class or function in the runtime module. If the runtime object
+         can be found, we proceed to the next step; if not, a warning is logged and we
+         skip to the next class or function definition.
+      iii. If the runtime object has a docstring, the docstring is added to the
+         class/function definition in the stub file.
    e. The modified stub file is written back to disk.
-   f. An AST safety check is performed to ensure that the modified stub file
-      is still valid. It checks that the ASTs before and after docstring_adder's
-      changes are identical, except for line numbers and added docstrings.
-      If the modified stub file is not valid, an exception is raised.
-      This is done after writing the modified stub file to disk so that it is
-      possible to inspect the incorrect changes docstring-adder made.
+   f. An AST safety check is performed to ensure that the modified stub file is still
+      valid. It checks that the ASTs before and after docstring_adder's changes are
+      identical, except for line numbers and added docstrings. If the modified stub file
+      is not valid, an exception is raised. This is done after writing the modified stub
+      file to disk so that it is possible to inspect the incorrect changes
+      docstring-adder made.
 
 Some miscellaneous details:
 - The tool should be idempotent. It should add docstrings where possible, but it should
   never remove or alter docstrings that were already present in the stub file.
-- Because it is a libcst-based codemod, it should not make spurious changes to
-  formatting or comments in the stub file. `type: ignore` comments should be preserved;
-  mypy and other type checkers should still be able to type-check the stub file after
+- Because it is a libcst-based codemod, it should not make spurious changes to formatting
+  or comments in the stub file. `type: ignore` comments should be preserved; mypy and
+  other type checkers should still be able to type-check the stub file after
   docstring-adder has run.
-- Nested namespaces are supported: docstring-adder is capable of adding a docstring
-  to a function definition inside a class (a method definition), a class definition
-  inside a class, or even a function definition inside a class definition inside a
-  class definition. Docstrings can even be added to name-mangled methods.
+- Nested namespaces are supported: docstring-adder is capable of adding a docstring to a
+  function definition inside a class (a method definition), a class definition inside a
+  class, or even a function definition inside a class definition inside a class definition.
+  Docstrings can even be added to name-mangled methods.
 - docstring-adder skips adding a docstring to a method definition if the method docstring
   at runtime is exactly the same as the docstring of the corresponding method on `object`.
   This is to avoid adding a lot of boilerplate docstrings that are not useful.
-- The tool should not add any docstrings to unreachable branches, given the platform
-  and Python version it is run on. For example, if it is being run on Windows,
-  it should not add any docstrings to definitions inside `if sys.platform == "linux"`
-  branches; similarly, if it is being run on Python 3.9, it should not add any docstrings
-  to definitions inside `if sys.version_info >= (3, 10)` branches. Fundamentally, the tool
+- The tool should not add any docstrings to unreachable branches, given the platform and
+  Python version it is run on. For example, if it is being run on Windows, it should not
+  add any docstrings to definitions inside `if sys.platform == "linux"` branches;
+  similarly, if it is being run on Python 3.9, it should not add any docstrings to
+  definitions inside `if sys.version_info >= (3, 10)` branches. Fundamentally, the tool
   can only accurately add docstrings to definitions that exist at runtime on the Python
   version and platform the tool is run on, since docstrings are retrieved by dynamically
   inspecting the runtime module that corresponds to the stub.
@@ -99,7 +98,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
-from typing import NamedTuple, TypeVar
+from typing import TypeVar
 
 import libcst
 import tomli
@@ -194,17 +193,24 @@ class RuntimeValue:
         return self.inner is NOT_FOUND
 
 
-class RuntimeParent(NamedTuple):
-    """Information regarding the namespace `DocstringAdder` is currently visiting.
+@dataclass
+class RuntimeParent:
+    """Information regarding the namespace `DocstringAdder` is currently visiting."""
 
-    `name` represents the (unqualified) name of the current namespace:
-    if we're visiting a class definition `Bar` inside a class definition `Baz` inside
-    a module `spam`, the name will be `Bar` (*not* `spam.Baz.Bar`).
+    __slots__ = {
+        "name": """The (unqualified) name of the current namespace:
 
-    `value` is the runtime value of the namespace. Usually this will be an instance
-    of `type` (a class object) or an instance of `types.ModuleType` (a module object).
-    It could theoretically be anything, however; don't make any assumptions about it!
-    """
+                For example, if we're visiting a class definition `Bar` inside a class
+                definition `Baz` inside a module `spam`, the name will be `Bar` (*not*
+                `spam.Baz.Bar`).
+                """,
+        "value": """The runtime value of the namespace.
+
+                Usually this will be an instance of `type` (a class object) or an
+                instance of `types.ModuleType` (a module object). It could theoretically
+                be anything, however; don't make any assumptions about it!
+                """,
+    }
 
     name: str
     value: RuntimeValue
