@@ -1,4 +1,86 @@
-"""Tool to add docstrings to stubs."""
+"""Tool to add docstrings to stubs.
+
+The tool is a libcst-based codemod. Given a path to a typeshed `stdlib` directory or a
+stubs package, docstring-adder will do the following:
+
+1. Determine a set of all stub files in the directory (using the `typeshed_client`
+   library).
+2. For each stub file:
+   a. We extract the module name of the stub file, again using the `typeshed_client`
+      library.
+   b. We attempt to import the corresponding runtime module. If the import fails, the
+      failure is logged and the stub file is skipped; if not, we proceed to the next
+      step.
+   c. If the runtime module has a docstring, it is added to the stub file.
+   d. For every class or function definition in the stub file:
+      i. If the class/function definition already has a docstring, we skip it and move on
+         to the next class/function definition. If not, we proceed to the next step.
+      ii. We attempt to locate the corresponding runtime object by looking up the
+         fullname of the class or function in the runtime module. If the runtime object
+         can be found, we proceed to the next step; if not, a warning is logged and we
+         skip to the next class or function definition.
+      iii. If the runtime object has a docstring, the docstring is added to the
+         class/function definition in the stub file.
+   e. The modified stub file is written back to disk.
+   f. An AST safety check is performed to ensure that the modified stub file is still
+      valid. It checks that the ASTs before and after docstring_adder's changes are
+      identical, except for line numbers and added docstrings. If the modified stub file
+      is not valid, an exception is raised. This is done after writing the modified stub
+      file to disk so that it is possible to inspect the incorrect changes
+      docstring-adder made.
+
+Some miscellaneous details:
+- The tool should be idempotent. It should add docstrings where possible, but it should
+  never remove or alter docstrings that were already present in the stub file.
+- Because it is a libcst-based codemod, it should not make spurious changes to formatting
+  or comments in the stub file. `type: ignore` comments should be preserved; mypy and
+  other type checkers should still be able to type-check the stub file after
+  docstring-adder has run.
+- Nested namespaces are supported: docstring-adder is capable of adding a docstring to a
+  function definition inside a class (a method definition), a class definition inside a
+  class, or even a function definition inside a class definition inside a class definition.
+  Docstrings can even be added to name-mangled methods.
+- docstring-adder skips adding a docstring to a method definition if the method docstring
+  at runtime is exactly the same as the docstring of the corresponding method on `object`.
+  This is to avoid adding a lot of boilerplate docstrings that are not useful.
+- The tool should not add any docstrings to unreachable branches, given the platform and
+  Python version it is run on. For example, if it is being run on Windows, it should not
+  add any docstrings to definitions inside `if sys.platform == "linux"` branches;
+  similarly, if it is being run on Python 3.9, it should not add any docstrings to
+  definitions inside `if sys.version_info >= (3, 10)` branches. Fundamentally, the tool
+  can only accurately add docstrings to definitions that exist at runtime on the Python
+  version and platform the tool is run on, since docstrings are retrieved by dynamically
+  inspecting the runtime module that corresponds to the stub.
+
+  docstring-adder is not capable of type inference; whether or not these `if` tests
+  evaluate to `True` is evaluated syntactically using APIs from `typeshed_client`.
+- For an overloaded function, docstring-adder will only add a docstring to the first
+  overload in any given suite. For example:
+
+  ```py
+  import sys
+  from typing import overload
+
+  if sys.platform == "linux":
+
+      @overload
+      def foo(x: int) -> int:
+          '''Linux-specific docs.'''
+
+      @overload
+      def foo(x: str) -> str: ...
+
+  else:
+
+      @overload
+      def foo(x: int) -> str:
+          '''Docs for foo on other platforms.'''
+
+      @overload
+      def foo(x: str) -> int: ...
+  ```
+
+"""
 
 from __future__ import annotations
 
@@ -16,19 +98,22 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
-from typing import NamedTuple, TypeVar
+from typing import TypeVar
 
 import libcst
 import tomli
 import typeshed_client
+from rich_argparse import RawDescriptionRichHelpFormatter
 from termcolor import colored
 from typing_extensions import override
 
 
 def log(*objects: object) -> None:
+    """Log a warning to the terminal."""
     print(colored(" ".join(map(str, objects)), "yellow"))
 
 
+# Type variable representing a node that could have a docstring added to it.
 DocumentableT = TypeVar("DocumentableT", libcst.ClassDef, libcst.FunctionDef)
 
 
@@ -91,18 +176,53 @@ def triple_quoted_docstring(content: str) -> str:
 
 @dataclass
 class RuntimeValue:
+    """An arbitrary value at runtime (that may or may not have a docstring).
+
+    We use a wrapper class here for stricter typing:
+    the runtime object corresponding to a class/function in a stub file
+    could be literally anything, but using `object` or `Any` would
+    make the code difficult to confidently refactor: type checkers would
+    allow instances of *any* type to be passed around, meaning they often
+    wouldn't spot mistakes in the code.
+    """
+
     inner: object
 
     def is_not_found(self) -> bool:
+        """Return `True` if the runtime object could not be found."""
         return self.inner is NOT_FOUND
 
 
-class RuntimeParent(NamedTuple):
+@dataclass
+class RuntimeParent:
+    """Information regarding the namespace `DocstringAdder` is currently visiting."""
+
+    __slots__ = {
+        "name": """The (unqualified) name of the current namespace:
+
+                For example, if we're visiting a class definition `Bar` inside a class
+                definition `Baz` inside a module `spam`, the name will be `Bar` (*not*
+                `spam.Baz.Bar`).
+                """,
+        "value": """The runtime value of the namespace.
+
+                Usually this will be an instance of `type` (a class object) or an
+                instance of `types.ModuleType` (a module object). It could theoretically
+                be anything, however; don't make any assumptions about it!
+                """,
+    }
+
     name: str
     value: RuntimeValue
 
 
 class DocstringAdder(libcst.CSTTransformer):
+    """Visitor to add docstrings to a stub file.
+
+    The visitor is a `libcst.CSTTransformer` that recursively attempts to adds
+    docstrings to all reachable class/function definitions inside a given stub file.
+    """
+
     def __init__(
         self,
         *,
@@ -132,6 +252,29 @@ class DocstringAdder(libcst.CSTTransformer):
         self.suite_visitation_stack: list[set[str]] = [set()]
 
     def maybe_mangled_name(self, name: str) -> str:
+        """Apply name mangling to `name`, if it is necessary.
+
+        Given the name of a class or function that would be implied by naively
+        reading a stub's source code, this function returns the name that the
+        given class or function actually has at runtime. This will usually be
+        the same as `name`, but if the source name starts with `__` and does
+        not end with `__` and is defined inside a class namespace, name
+        mangling will be applied at runtime.
+
+        For example, naively you would expect the name of the `__method`
+        method here to be `__method`, but in fact at runtime it needs to be
+        looked up as `_Foo__method` on the `Foo` class:
+
+            >>> class Foo:
+            ...     def __method(self): ...
+            >>> Foo.__method
+            Traceback (most recent call last):
+            File "<python-input-1>", line 1, in <module>
+                Foo.__method
+            AttributeError: type object 'Foo' has no attribute '__method'
+            >>> Foo._Foo__method
+            <function Foo.__method at 0x105a1e020>
+        """
         parent = self.runtime_parents[-1]
         if not isinstance(parent.value, type):
             return name
@@ -143,12 +286,19 @@ class DocstringAdder(libcst.CSTTransformer):
 
     @override
     def visit_ClassDef(self, node: libcst.ClassDef) -> None:
+        """Visit a class definition node in the stub file.
+
+        This hook is called before any sub-statements and sub-expressions inside the
+        class definition are visited or transformed. This allows us to retrieve the
+        runtime object representing the class, and append it to the stack of runtime
+        parents.
+        """
         runtime_object = get_runtime_object_for_stub(
-            runtime_parent=self.runtime_parents[-1],
             name=self.maybe_mangled_name(node.name.value),
+            runtime_parent=self.runtime_parents[-1],
         )
         if runtime_object is None:
-            self.log_runtime_object_not_found(node.name.value)
+            self._log_runtime_object_not_found(node.name.value)
             runtime_object = RuntimeValue(NOT_FOUND)
         self.runtime_parents.append(
             RuntimeParent(name=node.name.value, value=runtime_object)
@@ -158,6 +308,12 @@ class DocstringAdder(libcst.CSTTransformer):
     def leave_ClassDef(
         self, original_node: libcst.ClassDef, updated_node: libcst.ClassDef
     ) -> libcst.ClassDef:
+        """Attempt to add a docstring to the class definition.
+
+        This hook is called after all sub-statements and sub-expressions inside the
+        class definition have been visited and transformed.
+        """
+
         runtime_class = self.runtime_parents.pop().value
         if runtime_class.is_not_found():
             return original_node
@@ -167,17 +323,28 @@ class DocstringAdder(libcst.CSTTransformer):
             )
 
     def object_fullname(self, final_part: str) -> str:
+        """Given an unqualified name, convert it to a fully qualified name.
+
+        For example, given the name `method`, if we are visiting a class `Foo`
+        inside a class `Bar` inside a module `spam`, this will return `spam.Bar.Foo.method`.
+
+        If the name starts with `__`, it will be mangled according to the current class
+        namespace: if we were given the name `__method`, we would instead return
+        `spam.Bar.Foo._Foo__method`.
+        """
         parent_fullname = ".".join(parent.name for parent in self.runtime_parents)
         mangled_name = self.maybe_mangled_name(final_part)
         return f"{parent_fullname}.{mangled_name}"
 
-    def log_runtime_object_not_found(self, name: str) -> None:
+    def _log_runtime_object_not_found(self, name: str) -> None:
         log(f"Could not find {self.object_fullname(name)} at runtime")
 
     @override
     def leave_FunctionDef(
         self, original_node: libcst.FunctionDef, updated_node: libcst.FunctionDef
     ) -> libcst.FunctionDef:
+        """Attempt to add a docstring to the function definition."""
+
         # If there are multiple functions with the same name in an indented block,
         # it's probably an overloaded function or the `@setter` for a property.
         # Only add a docstring for the first definition.
@@ -191,12 +358,12 @@ class DocstringAdder(libcst.CSTTransformer):
             return original_node
 
         runtime_object = get_runtime_object_for_stub(
-            runtime_parent=runtime_parent,
             name=self.maybe_mangled_name(updated_node.name.value),
+            runtime_parent=runtime_parent,
         )
 
         if runtime_object is None:
-            self.log_runtime_object_not_found(updated_node.name.value)
+            self._log_runtime_object_not_found(updated_node.name.value)
             return original_node
 
         return self.document_class_or_function(
@@ -205,17 +372,36 @@ class DocstringAdder(libcst.CSTTransformer):
 
     @override
     def visit_IndentedBlock(self, node: libcst.IndentedBlock) -> None:
+        """Hook called before visiting an `IndentedBlock` node."""
         self.suite_visitation_stack.append(set())
 
     @override
     def leave_IndentedBlock(
         self, original_node: libcst.IndentedBlock, updated_node: libcst.IndentedBlock
     ) -> libcst.IndentedBlock:
+        """Hook called after an `IndentedBlock` node has been visited and, possibly, modified."""
         self.suite_visitation_stack.pop()
         return updated_node
 
     @override
     def leave_If(self, original_node: libcst.If, updated_node: libcst.If) -> libcst.If:
+        """Hook called when the transformer leaves an `if` statement.
+
+        All sub-statements and sub-expressions inside the `if` statement
+        will already have been visited (and, possibly, modified) by the
+        transformer. This method discards any changes that may have been
+        made to branches of code that are unreachable on the platform
+        and Python version docstring-adder is being run on.
+
+        See the module-level docstring for why we do this, and caveats
+        regarding how we evaluate the truthiness of the `if` test.
+
+        It might theoretically be possible to add more state to the
+        transformer so that we avoid making the undesirable changes in
+        the first place, rather than applying the undesirable changes and
+        then discarding them later on. This approach seems to work well
+        enough for now, however, and is simpler.
+        """
         condition_as_libcst_module = libcst.Module(
             body=[
                 libcst.SimpleStatementLine(body=[libcst.Expr(value=original_node.test)])
@@ -237,6 +423,8 @@ class DocstringAdder(libcst.CSTTransformer):
     def document_class_or_function(
         self, updated_node: DocumentableT, runtime_object: RuntimeValue
     ) -> DocumentableT:
+        """Attempt to add a docstring to a class or function definition."""
+
         object_fullname = self.object_fullname(updated_node.name.value)
         if object_fullname in self.blacklisted_objects:
             return updated_node
@@ -256,6 +444,7 @@ class DocstringAdder(libcst.CSTTransformer):
         if (
             # not sure why mypy thinks this is redundant...!
             isinstance(updated_node, libcst.FunctionDef)  # type: ignore[redundant-expr]
+            and not isinstance(runtime_object.inner, types.ModuleType)
             and updated_node.name.value in object.__dict__
         ):
             method_docstring_on_object = get_runtime_docstring(
@@ -305,11 +494,25 @@ class DocstringAdder(libcst.CSTTransformer):
 
 
 def get_runtime_docstring(runtime: RuntimeValue) -> str | None:
+    """Attempt to retrieve the docstring for a given runtime object.
+
+    We try to "tamper" with the docstring as little as possible after
+    retrieving it. For example, we don't use `inspect.cleandoc()` here:
+    the changes it makes are mostly unnecessary given that we apply
+    autoformatting to stub files after docstring-adder has run, and it
+    sometimes makes spurious/undesirable changes to the docstring.
+    """
     runtime_object = runtime.inner
 
     try:
-        # Don't use `inspect.getdoc()` here: it returns the docstring from superclasses
-        # if the docstring has not been overridden on a subclass, and that's not what we want.
+        # Don't use `inspect.getdoc()` here.
+        #
+        # If you call `inspect.getdoc(Foo.bar)`, where `Foo.bar` does not have a docstring,
+        # but `Foo` inherits from `Spam` and `Spam.bar` *does* have a docstring,
+        # `inspect.getdoc()` will return the docstring from `Spam.bar`.
+        #
+        # That's not what we want here: if the overridden method does not have a docstring in
+        # the source code at runtime, we shouldn't add one in the stub file either.
         runtime_docstring = runtime_object.__doc__
     except Exception:
         return None
@@ -317,25 +520,47 @@ def get_runtime_docstring(runtime: RuntimeValue) -> str | None:
     if not isinstance(runtime_docstring, str):
         return None
 
+    # These assertions are regression tests against bugs that were in early versions
+    # of docstring-adder, where the docstring for `staticmethod` itself would be
+    # added to the stub definition of a staticmethod.
+    # This was fixed by using `inspect.unwrap()` in `get_runtime_object_for_stub()`.
     if runtime_object is not staticmethod:
         assert runtime_docstring != staticmethod.__doc__, runtime
-
     if runtime_object is not classmethod:
         assert runtime_docstring != classmethod.__doc__, runtime
-
     if runtime_object is not property:
         assert runtime_docstring != property.__doc__, runtime
 
     return runtime_docstring
 
 
-class NOT_FOUND: ...
+class NOT_FOUND:
+    """Sentinel to indicate the runtime object for a stub definition could not be found.
+
+    A custom sentinel is required because `None` might be the corresponding runtime object
+    for many stub definitions.
+    """
 
 
 def get_runtime_object_for_stub(
-    runtime_parent: RuntimeParent, name: str
+    name: str, runtime_parent: RuntimeParent
 ) -> RuntimeValue | None:
-    # Some `sys`-module APIs are weird.
+    """Retrieve the runtime object corresponding to a stub definition.
+
+    Specifically, given the name of an object at runtime and the parent namespace
+    of that object at runtime, this function attempts to retrieve the runtime object
+    from that namespace.
+
+    For some edge cases (special `sys`-module APIs, `typing`-module aliases to objects
+    in `collections.abc`, etc.), we may return a *slightly* different object than what
+    would be implied directly by the name passed in, if it will result in the tool
+    being able to add a strictly superior docstring to the stub definition.
+    """
+
+    # Typeshed reports that the type of `sys.float_info` is a class called `sys._float_info`,
+    # but no such class exists at runtime. Pragmatically, it's better here if we grab the
+    # docstring from `sys.float_info` and add that to the stub definition of the
+    # `sys._float_info` class, so we strip the leading underscore from the name.
     if runtime_parent.value.inner is sys and name in {
         "_float_info",
         "_flags",
@@ -345,23 +570,30 @@ def get_runtime_object_for_stub(
         "_version_info",
     }:
         name = name[1:]
+
     try:
         runtime = inspect.unwrap(
             inspect.getattr_static(runtime_parent.value.inner, name)
         )
         # `inspect.unwrap()` doesn't do a great job for staticmethod/classmethod on Python 3.9,
         # because the `__wrapped__` attribute was added for these objects in Python 3.10.
+        # Instead, retrieve the underlying (hopefully documented) function by accessing
+        # the `__func__` attribute.
         if (
             sys.version_info < (3, 10)
             and not isinstance(runtime, type)
             and hasattr(runtime, "__func__")
         ):
             runtime = runtime.__func__
-    # Some getattr() calls raise TypeError, or something even more exotic
+    # Some getattr() and `hasattr()` calls raise TypeError,
+    # or something even more exotic,
+    # but we don't want the tool to crash in these cases.
     except Exception:
         return None
 
-    # The docstrings from `collections.abc` are better than those from `typing`.
+    # The docstrings from `collections.abc` are better than those from `typing`,
+    # so if the runtime object is a `typing`-module alias, return the class from
+    # `collections.abc` that it's aliasing instead.
     if isinstance(runtime, type(typing.Mapping)):
         runtime = runtime.__origin__  # type: ignore[attr-defined]
 
@@ -373,7 +605,7 @@ def add_docstrings_to_stub(
     context: typeshed_client.SearchContext,
     blacklisted_objects: frozenset[str],
 ) -> None:
-    """Add docstrings a stub module and all functions/classes in it."""
+    """Add docstrings to a stub module and all functions/classes in it."""
 
     print(f"Processing {module_name}... ", flush=True)
     path = typeshed_client.get_stub_file(module_name, search_context=context)
@@ -411,17 +643,6 @@ def add_docstrings_to_stub(
 
     check_no_destructive_changes(
         path=path, previous_stub=stub_source, new_stub=new_module
-    )
-
-
-def _make_safety_error(
-    old: ast.AST, new: ast.AST, old_value: object, new_value: object, message: str
-) -> RuntimeError:
-    def explain(node: ast.AST) -> str:
-        return f" (at line {node.lineno})" if hasattr(node, "lineno") else ""
-
-    raise RuntimeError(
-        f"{message}: {old_value}{explain(old)} != {new_value}{explain(new)}"
     )
 
 
@@ -465,6 +686,17 @@ def assert_asts_match(old: ast.AST, new: ast.AST) -> None:
                 new_field = [ast.Expr(value=ast.Constant(value=...))]
 
         _assert_ast_fields_match(old, new, old_field, new_field)
+
+
+def _make_safety_error(
+    old: ast.AST, new: ast.AST, old_value: object, new_value: object, message: str
+) -> RuntimeError:
+    def explain(node: ast.AST) -> str:
+        return f" (at line {node.lineno})" if hasattr(node, "lineno") else ""
+
+    raise RuntimeError(
+        f"{message}: {old_value}{explain(old)} != {new_value}{explain(new)}"
+    )
 
 
 _SCALAR_TYPES = (float, int, str, bytes, complex, type(None), type(...))
@@ -514,7 +746,7 @@ def _assert_ast_fields_match(
 
 
 def check_no_destructive_changes(path: Path, previous_stub: str, new_stub: str) -> None:
-    """Check that the new stub does not contain any destructive changes."""
+    """Check that docstring-adder has not made any destructive changes to the stub file."""
     previous_ast = ast.parse(previous_stub)
 
     try:
@@ -533,6 +765,19 @@ def check_no_destructive_changes(path: Path, previous_stub: str, new_stub: str) 
 
 
 def install_typeshed_packages(typeshed_paths: Sequence[Path]) -> None:
+    """Install the runtime packages corresponding to the given typeshed packages.
+
+    The function takes a list of paths pointing to source definitions of typeshed packages.
+    For each path passed, it will:
+    - Install the runtime package corresponding to the typeshed package
+    - Install any additional "stubtest requirements" specified in the package's
+      METADATA.toml file. These are additional packages that are installed in typeshed's
+      CI when running the stubtest tool for the stubs package. Often, certain submodules
+      will not be importable at runtime unless these additional packages are installed.
+
+    The packages will be directly installed into the Python environment
+    that docstring-adder is being run in.
+    """
     to_install: list[str] = []
     for path in typeshed_paths:
         metadata_path = path / "METADATA.toml"
@@ -582,13 +827,20 @@ STDLIB_OBJECT_BLACKLIST = frozenset({
 
 
 def load_blacklist(path: Path) -> frozenset[str]:
+    """Load a "blacklist" file.
+
+    A "blacklist" file is text file containing a list of APIs
+    that docstring-adder should skip when adding docstrings to stubs.
+    """
     with path.open() as f:
         entries = frozenset(line.split("#")[0].strip() for line in f)
     return entries - {""}
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
+def _main() -> None:
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=RawDescriptionRichHelpFormatter
+    )
     parser.add_argument(
         "-s",
         "--stdlib-path",
@@ -664,4 +916,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    _main()

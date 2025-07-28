@@ -12,6 +12,7 @@ license = { text = "MIT" }
 requires-python = ">=3.9"
 dependencies = [
     "libcst>=1.8.2",
+    "rich-argparse>=1.7.0",
     "termcolor>=3.1.0",
     "tomli>=2.2.1",
     "typeshed-client @ git+https://github.com/JelleZijlstra/typeshed_client@dc933baf47b3df4bbaf4e3f2d6a1fe238e6c7c68",
@@ -42,7 +43,7 @@ classifiers = [
 "Bug Tracker" = "https://github.com/AlexWaygood/docstring-adder/issues"
 
 [project.scripts]
-add-docstrings = "add_docstrings:main"
+add-docstrings = "add_docstrings:_main"
 
 [tool.hatch.build.targets.wheel]
 include = ["add_docstrings.py"]
@@ -78,6 +79,7 @@ select = [
     "ARG",
     "B",
     "B9",
+    "D",
     "E",
     "EXE",
     "F",
@@ -95,6 +97,9 @@ select = [
     "PLW1510",
 ]
 ignore = [
+    # Unnecessarily strict/pedantic
+    "D107",
+    "D202",
     # These are all enforced by, or incompatible with, the ruff formatter:
     "E203",
     "E501",
