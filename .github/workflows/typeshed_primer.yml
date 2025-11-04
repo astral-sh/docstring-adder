@@ -42,7 +42,7 @@ jobs:
         run: |
           uvx --python=3.13 --from=./old_codemod add-docstrings --stdlib-path ./typeshed/stdlib
           uvx --python=3.9 --from=./old_codemod add-docstrings --stdlib-path ./typeshed/stdlib
-          uvx --directory=typeshed black stdlib|| true
+          uvx --directory=typeshed black stdlib || true
           git -C typeshed commit -a -m "With old stubdefaulter"
       - name: Codemod typeshed using PR branch
         run: |

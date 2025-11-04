@@ -1,6 +1,6 @@
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+    rev: v6.0.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
@@ -9,7 +9,7 @@ repos:
       - id: check-merge-conflict
       - id: check-case-conflict
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.11.12
+    rev: v0.14.3
     hooks:
       - id: ruff-check
       - id: ruff-format
@@ -34,19 +34,19 @@ repos:
     hooks:
       - id: validate-pyproject
   - repo: https://github.com/python-jsonschema/check-jsonschema
-    rev: 0.33.2
+    rev: 0.34.1
     hooks:
       - id: check-github-workflows
   # `actionlint` hook, for verifying correct syntax in GitHub Actions workflows.
   - repo: https://github.com/rhysd/actionlint
-    rev: v1.7.7
+    rev: v1.7.8
     hooks:
       - id: actionlint
         additional_dependencies:
           # actionlint has a shellcheck integration which extracts shell scripts in `run:` steps from GitHub Actions
           # and checks these with shellcheck. This is arguably its most useful feature,
           # but the integration only works if shellcheck is installed
-          - "github.com/wasilibs/go-shellcheck/cmd/shellcheck@v0.10.0"
+          - "github.com/wasilibs/go-shellcheck/cmd/shellcheck@v0.11.1"
   - repo: meta
     hooks:
       - id: check-hooks-apply
