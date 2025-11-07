@@ -56,12 +56,8 @@ jobs:
           uvx --directory=typeshed black stdlib || true
       - name: Get the diff between the two docstring-adder runs
         run: git -C typeshed diff | tee docstring-adder-diff.txt
-      - name: Save PR number
-        run: echo ${{ github.event.pull_request.number }} | tee pr_number.txt
-      - name: Upload diff and PR number
+      - name: Upload diff
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: docstring-adder-diff
-          path: |
-            docstring-adder-diff.txt
-            pr_number.txt
+          path: docstring-adder-diff.txt
