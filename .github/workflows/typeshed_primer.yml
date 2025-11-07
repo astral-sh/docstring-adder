@@ -20,20 +20,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout docstring-adder on target branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           ref: ${{ github.base_ref }}
           path: old_codemod
+          persist-credentials: false
       - name: Checkout docstring-adder on PR branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           path: new_codemod
+          persist-credentials: false
       - name: Checkout typeshed
-        uses: actions/checkout@v4
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           repository: python/typeshed
           path: typeshed
-      - uses: astral-sh/setup-uv@v6
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
       - name: Setup git
         run: |
           git config --global user.name stubdefaulter
@@ -56,7 +59,7 @@ jobs:
       - name: Save PR number
         run: echo ${{ github.event.pull_request.number }} | tee pr_number.txt
       - name: Upload diff and PR number
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: docstring-adder-diff
           path: |
