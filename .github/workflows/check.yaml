@@ -9,8 +9,7 @@ on:
   schedule:
     - cron: "0 12 * * *"
 
-permissions:
-  contents: read
+permissions: {}
 
 env:
   FORCE_COLOR: 1 # Request colored output from CLI tools supporting it
@@ -135,7 +134,7 @@ jobs:
       - pandas-stubs
     if: ${{ github.repository == 'astral-sh/docstring-adder' && always() && github.event_name == 'schedule' && ((needs.stdlib.result == 'failure') || (needs.typeshed-third-party.result == 'failure') || (needs.mypy.result == 'failure') || (needs.pre-commit.result == 'failure') || (needs.pandas-stubs.result == 'failure')) }}
     permissions:
-      issues: write
+      issues: write # to create issues through actions/github-script
     steps:
       - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
