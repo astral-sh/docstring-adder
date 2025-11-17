@@ -9,7 +9,7 @@ repos:
       - id: check-merge-conflict
       - id: check-case-conflict
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.14.3
+    rev: v0.14.5
     hooks:
       - id: ruff-check
       - id: ruff-format
@@ -34,7 +34,7 @@ repos:
     hooks:
       - id: validate-pyproject
   - repo: https://github.com/python-jsonschema/check-jsonschema
-    rev: 0.34.1
+    rev: 0.35.0
     hooks:
       - id: check-github-workflows
   # `actionlint` hook, for verifying correct syntax in GitHub Actions workflows.
