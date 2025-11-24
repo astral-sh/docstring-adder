@@ -114,6 +114,16 @@ jobs:
       - uses: astral-sh/setup-uv@1e862dfacbd1d6d858c55d9b792c756523627244 # v7.1.4
       - run: uv run mypy
 
+  ty:
+    name: Run ty
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1e862dfacbd1d6d858c55d9b792c756523627244 # v7.1.4
+      - run: uv run ty check
+
   pre-commit:
     runs-on: ubuntu-latest
     steps:
@@ -130,9 +140,10 @@ jobs:
       - stdlib
       - typeshed-third-party
       - mypy
+      - ty
       - pre-commit
       - pandas-stubs
-    if: ${{ github.repository == 'astral-sh/docstring-adder' && always() && github.event_name == 'schedule' && ((needs.stdlib.result == 'failure') || (needs.typeshed-third-party.result == 'failure') || (needs.mypy.result == 'failure') || (needs.pre-commit.result == 'failure') || (needs.pandas-stubs.result == 'failure')) }}
+    if: ${{ github.repository == 'astral-sh/docstring-adder' && always() && github.event_name == 'schedule' && ((needs.stdlib.result == 'failure') || (needs.typeshed-third-party.result == 'failure') || (needs.mypy.result == 'failure') || (needs.ty.result == 'failure') || (needs.pre-commit.result == 'failure') || (needs.pandas-stubs.result == 'failure')) }}
     permissions:
       issues: write # to create issues through actions/github-script
     steps:
