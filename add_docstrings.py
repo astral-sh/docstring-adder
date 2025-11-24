@@ -431,7 +431,7 @@ class DocstringAdder(libcst.CSTTransformer):
         if object_fullname in self.blacklisted_objects:
             return updated_node
 
-        if updated_node.get_docstring() is not None:  # ty: ignore[invalid-argument-type]
+        if updated_node.get_docstring() is not None:
             return updated_node
 
         docstring = get_runtime_docstring(runtime=runtime_object)
@@ -453,7 +453,7 @@ class DocstringAdder(libcst.CSTTransformer):
                 runtime=RuntimeValue(inner=object.__dict__[updated_node.name.value])
             )
             if docstring == method_docstring_on_object:
-                return updated_node  # ty: ignore[invalid-return-type]
+                return updated_node
 
         docstring_node = libcst.Expr(
             libcst.SimpleString(triple_quoted_docstring(docstring))
