@@ -52,7 +52,7 @@ include = ["add_docstrings.py"]
 allow-direct-references = true
 
 [dependency-groups]
-dev = ["mypy==1.18.2"]
+dev = ["mypy==1.18.2", "ty==0.0.1a27"]
 
 [tool.mypy]
 files = ['*.py']
@@ -64,6 +64,10 @@ warn_unreachable = true
 local_partial_types = true
 allow_redefinition = true
 python_version = "3.9"
+
+[tool.ty.rules]
+possibly-unresolved-reference = "error"
+division-by-zero = "error"
 
 [tool.ruff]
 fix = true
