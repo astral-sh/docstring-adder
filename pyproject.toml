@@ -52,7 +52,7 @@ include = ["add_docstrings.py"]
 allow-direct-references = true
 
 [dependency-groups]
-dev = ["mypy==1.18.2", "ty==0.0.1a28"]
+dev = ["mypy==1.18.2", "ty==0.0.1a29"]
 
 [tool.mypy]
 files = ['*.py']
