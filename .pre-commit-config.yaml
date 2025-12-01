@@ -9,7 +9,7 @@ repos:
       - id: check-merge-conflict
       - id: check-case-conflict
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.14.6
+    rev: v0.14.7
     hooks:
       - id: ruff-check
       - id: ruff-format
@@ -49,7 +49,7 @@ repos:
           - "github.com/wasilibs/go-shellcheck/cmd/shellcheck@v0.11.1"
   # zizmor detects security vulnerabilities in GitHub Actions workflows.
   - repo: https://github.com/zizmorcore/zizmor-pre-commit
-    rev: v1.16.3
+    rev: v1.18.0
     hooks:
       - id: zizmor
   - repo: meta
