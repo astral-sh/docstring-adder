@@ -2,10 +2,9 @@
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
   dependencyDashboard: true,
   suppressNotifications: ["prEditedNotification"],
-  extends: ["config:recommended"],
+  extends: ["github>astral-sh/renovate-config"],
   semanticCommits: "disabled",
   separateMajorMinor: false,
-  prHourlyLimit: 10,
   enabledManagers: ["github-actions", "pre-commit", "pep621"],
   "pre-commit": {
     enabled: true,
