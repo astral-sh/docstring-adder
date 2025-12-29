@@ -92,8 +92,10 @@ import contextlib
 import importlib
 import inspect
 import io
+import itertools
 import subprocess
 import sys
+import textwrap
 import types
 import typing
 from collections.abc import Sequence
@@ -137,22 +139,7 @@ def triple_quoted_docstring(content: str) -> str:
 
     # In general we try to tamper with the content as little as possible,
     # but this generally leads to more consistent and more readable docstrings.
-    #
-    # For a single-line docstring, this *can* result in funny things like:
-    #
-    # ```py
-    # def foo():
-    #     """A docstring.
-    #     """
-    # ```
-    #
-    # But we don't need to worry about that here: Black sorts that out for us and turns it into:
-    #
-    # ```py
-    # def foo():
-    #     """A docstring."""
-    # ```
-    if not content.rstrip(" \t").endswith("\n"):
+    if "\n" in content and not content.rstrip(" \t").endswith("\n"):
         content += "\n"
 
     escaped_string = "".join(map(escape_char, content))
@@ -596,7 +583,13 @@ def get_runtime_object_for_stub(
     # The docstrings from `collections.abc` are better than those from `typing`,
     # so if the runtime object is a `typing`-module alias, return the class from
     # `collections.abc` that it's aliasing instead.
-    if isinstance(runtime, type(typing.Mapping)):
+    #
+    # ... with a few exceptions to the exceptions,
+    # such as `typing.Callable` and `typing.Type`.
+    if (
+        isinstance(runtime, type(typing.Mapping))
+        and runtime not in {typing.Tuple, typing.Callable, typing.Type}  # type: ignore[comparison-overlap]  # noqa: UP006
+    ):
         runtime = runtime.__origin__  # type: ignore[attr-defined]
 
     return RuntimeValue(inner=runtime)
@@ -609,6 +602,90 @@ def add_docstrings_to_stub(
     blacklisted_objects: frozenset[str],
 ) -> None:
     """Add docstrings to a stub module and all functions/classes in it."""
+
+    T = TypeVar(
+        "T",
+        "libcst.SimpleStatementLine | libcst.BaseCompoundStatement",
+        "libcst.BaseSmallStatement | libcst.BaseStatement",
+    )
+
+    def visit_typing_module_suite(body: Sequence[T], indentation: int = 0) -> list[T]:
+        new_body: list[T] = []
+        added_docstring_to_previous = False
+        for statement, next_statement in itertools.zip_longest(body, body[1:]):
+            if isinstance(statement, libcst.If):
+                body = visit_typing_module_suite(
+                    statement.body.body,  # type: ignore[arg-type]
+                    indentation=indentation + 1,
+                )
+                orelse = statement.orelse and statement.orelse.with_changes(
+                    body=statement.orelse.body.with_changes(
+                        body=visit_typing_module_suite(
+                            statement.orelse.body.body, indentation=indentation + 1
+                        )
+                    )
+                )
+                statement = statement.with_changes(
+                    body=statement.body.with_changes(body=body), orelse=orelse
+                )
+
+            if (
+                added_docstring_to_previous
+                and isinstance(statement, libcst.SimpleStatementLine)
+                and all(line.comment is None for line in statement.leading_lines)
+            ):
+                new_body.append(
+                    statement.with_changes(
+                        leading_lines=[libcst.EmptyLine(), *statement.leading_lines]  # type: ignore[has-type]
+                    )
+                )
+            else:
+                new_body.append(statement)
+
+            added_docstring_to_previous = False
+
+            if (
+                isinstance(statement, libcst.SimpleStatementLine)
+                and len(statement.body) == 1
+                and isinstance(statement.body[0], libcst.AnnAssign)
+                and isinstance(statement.body[0].target, libcst.Name)
+                and not (
+                    isinstance(next_statement, libcst.SimpleStatementLine)
+                    and len(next_statement.body) == 1
+                    and isinstance(next_statement.body[0], libcst.Expr)
+                    and isinstance(next_statement.body[0].value, libcst.SimpleString)
+                )
+            ):
+                runtime_name = statement.body[0].target.value
+                runtime_value = get_runtime_object_for_stub(
+                    runtime_name,
+                    RuntimeParent(name=module_name, value=RuntimeValue(runtime_module)),
+                )
+                if runtime_value is None:
+                    continue
+                docstring = get_runtime_docstring(runtime_value)
+                if docstring is None:
+                    continue
+                if docstring == type(runtime_value.inner).__doc__:
+                    continue
+                if indentation and "\n" in docstring:
+                    indentation_string = " " * indentation * 4
+                    docstring = (
+                        textwrap.indent(docstring, prefix=indentation_string).lstrip()
+                        + indentation_string
+                    )
+                new_body.append(
+                    libcst.SimpleStatementLine(
+                        body=[
+                            libcst.Expr(
+                                libcst.SimpleString(triple_quoted_docstring(docstring))
+                            )
+                        ]
+                    )
+                )
+                added_docstring_to_previous = True
+
+        return new_body
 
     print(f"Processing {module_name}... ", flush=True)
     try:
@@ -631,6 +708,11 @@ def add_docstrings_to_stub(
         stub_source = docstring + stub_source if stub_source.strip() else docstring
         parsed_module = libcst.parse_module(stub_source)
 
+    if path.name in {"typing.pyi", "typing_extensions.pyi"}:
+        parsed_module = parsed_module.with_changes(
+            body=visit_typing_module_suite(parsed_module.body)
+        )
+
     transformer = DocstringAdder(
         module_name=module_name,
         runtime_module=runtime_module,
@@ -641,9 +723,14 @@ def add_docstrings_to_stub(
     new_module = parsed_module.visit(transformer).code
     path.write_text(new_module, encoding="utf-8")
 
-    check_no_destructive_changes(
-        path=path, previous_stub=stub_source, new_stub=new_module
-    )
+    # We skip the check for typing.pyi and typing_extensions.pyi,
+    # because we add attribute docstrings to various special forms
+    # in a way that breaks the AST equivalence check. We check these
+    # modules by just eyeballing them manually.
+    if path.name not in {"typing.pyi", "typing_extensions.pyi"}:
+        check_no_destructive_changes(
+            path=path, previous_stub=stub_source, new_stub=new_module
+        )
 
 
 def assert_asts_match(old: ast.AST, new: ast.AST) -> None:
