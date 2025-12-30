@@ -584,11 +584,11 @@ def get_runtime_object_for_stub(
     # so if the runtime object is a `typing`-module alias, return the class from
     # `collections.abc` that it's aliasing instead.
     #
-    # ... with a few exceptions to the exceptions,
-    # such as `typing.Callable` and `typing.Type`.
+    # ... with one exception to the exceptions: `typing.Callable`
     if (
         isinstance(runtime, type(typing.Mapping))
-        and runtime not in {typing.Tuple, typing.Callable, typing.Type}  # type: ignore[comparison-overlap]  # noqa: UP006
+        and runtime is not typing.Callable  # type: ignore[comparison-overlap]
+        and runtime.__origin__.__module__ == "collections.abc"  # type: ignore[attr-defined]
     ):
         runtime = runtime.__origin__  # type: ignore[attr-defined]
 
@@ -609,19 +609,29 @@ def add_docstrings_to_stub(
         "libcst.BaseSmallStatement | libcst.BaseStatement",
     )
 
-    def visit_typing_module_suite(body: Sequence[T], indentation: int = 0) -> list[T]:
+    def visit_module_suite(
+        module_name: str, body: Sequence[T], *, indentation: int = 0
+    ) -> list[T]:
+        """Add Sphinx-style 'attribute docstrings' to assignments in a module body.
+
+        We also recurse into the body of `if`/`elif`/`else` blocks.
+        """
         new_body: list[T] = []
         added_docstring_to_previous = False
         for statement, next_statement in itertools.zip_longest(body, body[1:]):
+            # recurse into `if`, `else` and `elif` blocks
             if isinstance(statement, libcst.If):
-                body = visit_typing_module_suite(
+                body = visit_module_suite(
+                    module_name,
                     statement.body.body,  # type: ignore[arg-type]
                     indentation=indentation + 1,
                 )
                 orelse = statement.orelse and statement.orelse.with_changes(
                     body=statement.orelse.body.with_changes(
-                        body=visit_typing_module_suite(
-                            statement.orelse.body.body, indentation=indentation + 1
+                        body=visit_module_suite(
+                            module_name,
+                            statement.orelse.body.body,
+                            indentation=indentation + 1,
                         )
                     )
                 )
@@ -629,10 +639,16 @@ def add_docstrings_to_stub(
                     body=statement.body.with_changes(body=body), orelse=orelse
                 )
 
+            # If we just added a docstring to the previous statement,
+            # add a blank line before this statement.
+            # Black will not do this for us.
             if (
                 added_docstring_to_previous
-                and isinstance(statement, libcst.SimpleStatementLine)
-                and all(line.comment is None for line in statement.leading_lines)
+                and isinstance(
+                    statement,
+                    (libcst.SimpleStatementLine, libcst.BaseCompoundStatement),
+                )
+                and all(line.comment is not None for line in statement.leading_lines)
             ):
                 new_body.append(
                     statement.with_changes(
@@ -644,11 +660,11 @@ def add_docstrings_to_stub(
 
             added_docstring_to_previous = False
 
+            # If it's an annotated assignment that we could potentially add a docstring to...
             if (
                 isinstance(statement, libcst.SimpleStatementLine)
                 and len(statement.body) == 1
-                and isinstance(statement.body[0], libcst.AnnAssign)
-                and isinstance(statement.body[0].target, libcst.Name)
+                # ... and there is no docstring already present...
                 and not (
                     isinstance(next_statement, libcst.SimpleStatementLine)
                     and len(next_statement.body) == 1
@@ -656,24 +672,71 @@ def add_docstrings_to_stub(
                     and isinstance(next_statement.body[0].value, libcst.SimpleString)
                 )
             ):
-                runtime_name = statement.body[0].target.value
+                assignment = statement.body[0]
+                if isinstance(assignment, libcst.AnnAssign):
+                    target = assignment.target
+                elif (
+                    isinstance(assignment, libcst.Assign)
+                    and len(assignment.targets) == 1
+                ):
+                    target = assignment.targets[0].target
+                else:
+                    continue
+
+                if not isinstance(target, libcst.Name):
+                    continue
+
+                # ... then try to add a docstring to it.
+                runtime_name = target.value
+                if (module_name + runtime_name) in blacklisted_objects:
+                    continue
+
                 runtime_value = get_runtime_object_for_stub(
                     runtime_name,
                     RuntimeParent(name=module_name, value=RuntimeValue(runtime_module)),
                 )
+
                 if runtime_value is None:
                     continue
+
                 docstring = get_runtime_docstring(runtime_value)
                 if docstring is None:
                     continue
+
+                # If it's an unannotated assignment to a class/function/module,
+                # or it's likely to be a type alias to a class,
+                # there's no need to add an attribute docstring to the variable:
+                # type checkers should pick up the docstring anyway.
+                if (
+                    isinstance(assignment, libcst.Assign)
+                    or assignment.value is not None
+                ) and isinstance(
+                    runtime_value.inner,
+                    (
+                        type,
+                        types.FunctionType,
+                        types.BuiltinFunctionType,
+                        types.ModuleType,
+                        types.GenericAlias,
+                    ),
+                ):
+                    continue
+
+                # For example, `TYPE_CHECKING` is just a `bool`, so
+                # its docstring will just be the same as `bool.__doc__`,
+                # which doesn't actually provide any information about the
+                # `TYPE_CHECKING` variable itself.
                 if docstring == type(runtime_value.inner).__doc__:
                     continue
+
+                # If we're visiting an indented block, indent the docstring
                 if indentation and "\n" in docstring:
                     indentation_string = " " * indentation * 4
                     docstring = (
                         textwrap.indent(docstring, prefix=indentation_string).lstrip()
                         + indentation_string
                     )
+
                 new_body.append(
                     libcst.SimpleStatementLine(
                         body=[
@@ -708,10 +771,9 @@ def add_docstrings_to_stub(
         stub_source = docstring + stub_source if stub_source.strip() else docstring
         parsed_module = libcst.parse_module(stub_source)
 
-    if path.name in {"typing.pyi", "typing_extensions.pyi"}:
-        parsed_module = parsed_module.with_changes(
-            body=visit_typing_module_suite(parsed_module.body)
-        )
+    parsed_module = parsed_module.with_changes(
+        body=visit_module_suite(module_name, parsed_module.body)
+    )
 
     transformer = DocstringAdder(
         module_name=module_name,
@@ -723,14 +785,9 @@ def add_docstrings_to_stub(
     new_module = parsed_module.visit(transformer).code
     path.write_text(new_module, encoding="utf-8")
 
-    # We skip the check for typing.pyi and typing_extensions.pyi,
-    # because we add attribute docstrings to various special forms
-    # in a way that breaks the AST equivalence check. We check these
-    # modules by just eyeballing them manually.
-    if path.name not in {"typing.pyi", "typing_extensions.pyi"}:
-        check_no_destructive_changes(
-            path=path, previous_stub=stub_source, new_stub=new_module
-        )
+    check_no_destructive_changes(
+        path=path, previous_stub=stub_source, new_stub=new_module
+    )
 
 
 def assert_asts_match(old: ast.AST, new: ast.AST) -> None:
@@ -751,26 +808,64 @@ def assert_asts_match(old: ast.AST, new: ast.AST) -> None:
     for field_name in old._fields:
         old_field = getattr(old, field_name)
         new_field = getattr(new, field_name)
-        # Allow a new body with just a docstring to be equivalent to a pre-existing body with just "..."
-        if (
-            field_name == "body"
-            and isinstance(old, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-            # There is a docstring in the new node...
-            and new_field
-            and isinstance(new_field[0], ast.Expr)
-            and isinstance(new_field[0].value, ast.Constant)
-            and isinstance(new_field[0].value.value, str)
-            # ... and there wasn't one in the old node
-            and not (
-                old_field
+
+        # Allow docstrings to have been added to the body
+        if field_name in {"body", "orelse"}:
+            # Allow replacing a body that only has `...` in it with
+            # a body that only has a docstring in it
+            if (
+                len(old_field) == 1
                 and isinstance(old_field[0], ast.Expr)
                 and isinstance(old_field[0].value, ast.Constant)
-                and isinstance(old_field[0].value.value, str)
-            )
-        ):
-            new_field = new_field[1:]
-            if not new_field:
-                new_field = [ast.Expr(value=ast.Constant(value=...))]
+                and old_field[0].value.value is ...
+                and len(new_field) == 1
+                and isinstance(new_field[0], ast.Expr)
+                and isinstance(new_field[0].value, ast.Constant)
+                and isinstance(new_field[0].value.value, str)
+            ):
+                continue
+
+            old_field_iter = iter(old_field)
+            new_field_iter = iter(new_field)
+            new_field = []
+            next_old = next(old_field_iter, None)
+            next_new = next(new_field_iter, None)
+
+            while next_old is not None:
+                if next_new is None:
+                    raise _make_safety_error(
+                        old,
+                        new,
+                        type(old).__name__,
+                        type(new).__name__,
+                        "Nodes appear to have been removed from the body of a function/class/module/if-else",
+                    )
+
+                # if there was already a docstring, we expect it to have been preserved
+                if (
+                    isinstance(next_old, ast.Expr)
+                    and isinstance(next_old.value, ast.Constant)
+                    and isinstance(next_old.value.value, str)
+                ):
+                    new_field.append(next_new)
+                    next_old = next(old_field_iter, None)
+                    next_new = next(new_field_iter, None)
+
+                # Allow new docstrings to have been added
+                # if there wasn't there one before
+                elif (
+                    isinstance(next_new, ast.Expr)
+                    and isinstance(next_new.value, ast.Constant)
+                    and isinstance(next_new.value.value, str)
+                ):
+                    next_new = next(new_field_iter, None)
+
+                # if there wasn't a docstring previously and there isn't one being added,
+                # we expect the nodes to match
+                else:
+                    new_field.append(next_new)
+                    next_old = next(old_field_iter, None)
+                    next_new = next(new_field_iter, None)
 
         _assert_ast_fields_match(old, new, old_field, new_field)
 
