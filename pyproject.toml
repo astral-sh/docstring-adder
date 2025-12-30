@@ -113,11 +113,8 @@ ignore = [
     "E721",
     "RUF005",
     # Let mypy/pyright complain about blanket type ignores or implicit optional
-    "PGH004",
+    "PGH003",
     "RUF013",
-    # Makes code slower and more verbose
-    # https://github.com/astral-sh/ruff/issues/7871
-    "UP038",
 ]
 unfixable = [
     "F841",    # unused variable. ruff keeps the call, but mostly we want to get rid of it all
