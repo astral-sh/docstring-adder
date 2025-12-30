@@ -144,6 +144,11 @@ def triple_quoted_docstring(content: str) -> str:
 
     escaped_string = "".join(map(escape_char, content))
 
+    # Why would somebody add an empty docstring...??
+    # No idea. But, empirically, it happens.
+    if not escaped_string:
+        return '"' * 6
+
     quotes = ['"""', "'''"]
     possible_quotes = [q for q in quotes if q not in escaped_string]
 

@@ -10,7 +10,7 @@ def add_docstrings(typeshed_dir: Path, docstring_adder_dir: Path) -> None:
     """Add docstrings to third-party typeshed stubs."""
 
     packages = list((typeshed_dir / "stubs").iterdir())
-    for i, path in enumerate((typeshed_dir / "stubs").iterdir(), start=1):
+    for i, path in enumerate(packages, start=1):
         print(f"\nCodemodding package [{i}/{len(packages)}]\n")
         with tempfile.TemporaryDirectory() as td:
             venv_dir = f"{td}-venv"
