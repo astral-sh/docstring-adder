@@ -520,6 +520,24 @@ def get_runtime_docstring(runtime: RuntimeValue) -> str | None:
     if runtime_object is not property:
         assert runtime_docstring != property.__doc__, runtime
 
+    # For example, `TYPE_CHECKING` is just a `bool`, so
+    # its docstring will just be the same as `bool.__doc__`,
+    # which doesn't actually provide any information about the
+    # `TYPE_CHECKING` variable itself. But we *do* want to add
+    # attribute docstrings for the various `sys`-module variables
+    # such as `sys.version_info`, `sys.float_info`, etc.,
+    # even though these variables have the same docstrings as their
+    # classes.
+    if (
+        runtime_object is not type
+        and type(runtime_object).__module__ != "sys"
+        and (
+            runtime_docstring
+            == get_runtime_docstring(RuntimeValue(type(runtime_object)))
+        )
+    ):
+        return None
+
     return runtime_docstring
 
 
@@ -543,13 +561,15 @@ def get_runtime_object_for_stub(
     For some edge cases (special `sys`-module APIs, `typing`-module aliases to objects
     in `collections.abc`, etc.), we may return a *slightly* different object than what
     would be implied directly by the name passed in, if it will result in the tool
-    being able to add a strictly superior docstring to the stub definition.
+    being able to add strictly superior docstrings to the stub definition.
     """
 
     # Typeshed reports that the type of `sys.float_info` is a class called `sys._float_info`,
-    # but no such class exists at runtime. Pragmatically, it's better here if we grab the
-    # docstring from `sys.float_info` and add that to the stub definition of the
-    # `sys._float_info` class, so we strip the leading underscore from the name.
+    # but no such class exists at runtime. Pragmatically, it's better here if we return the
+    # runtime object for `type(sys.float_info)` here. Although `sys.float_info` itself has
+    # an attribute docstring added to it elsewhere, returning the runtime object for
+    # `type(sys.float_info)` here has the added advantage that we recurse into methods and
+    # properties defined on the class as well.
     if runtime_parent.value.inner is sys and name in {
         "_float_info",
         "_flags",
@@ -720,13 +740,6 @@ def add_docstrings_to_stub(
                         types.GenericAlias,
                     ),
                 ):
-                    continue
-
-                # For example, `TYPE_CHECKING` is just a `bool`, so
-                # its docstring will just be the same as `bool.__doc__`,
-                # which doesn't actually provide any information about the
-                # `TYPE_CHECKING` variable itself.
-                if docstring == type(runtime_value.inner).__doc__:
                     continue
 
                 # If we're visiting an indented block, indent the docstring
