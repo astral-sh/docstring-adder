@@ -700,6 +700,11 @@ def add_attribute_docstrings(
                 continue
 
             docstring = docstring.strip(" \t")
+            docstring_lines = docstring.split("\n")
+            docstring = "\n".join([
+                docstring_lines[0],
+                textwrap.dedent("\n".join(docstring_lines[1:])),
+            ])
 
             # If we're visiting an indented block, indent the docstring
             if indentation and "\n" in docstring:
