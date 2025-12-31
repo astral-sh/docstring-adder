@@ -121,7 +121,7 @@ def log(*objects: object) -> None:
 DocumentableT = TypeVar("DocumentableT", libcst.ClassDef, libcst.FunctionDef)
 
 
-def triple_quoted_docstring(content: str) -> str:
+def triple_quoted_docstring(content: str, indentation: str | None = None) -> str:
     """Escape the docstring and return it as a triple-quoted string.
 
     Logic adapted from `ast.unparse()` internals.
@@ -141,6 +141,8 @@ def triple_quoted_docstring(content: str) -> str:
     # but this generally leads to more consistent and more readable docstrings.
     if "\n" in content and not content.rstrip(" \t").endswith("\n"):
         content += "\n"
+        if indentation is not None:
+            content += indentation
 
     escaped_string = "".join(map(escape_char, content))
 
@@ -375,8 +377,21 @@ class DocstringAdder(libcst.CSTTransformer):
     ) -> libcst.IndentedBlock:
         """Hook called after an `IndentedBlock` node has been visited and, possibly, modified."""
         self.suite_visitation_stack.pop()
+
+        # Don't add attribute docstrings to fields in `NamedTuple` classes.
+        # The generated docstrings for the properties in these classes
+        # are always things like "Alias for field number 0", which clutter
+        # the stubs and aren't useful.
+        runtime_parent = self.runtime_parents[-1].value.inner
+        if (
+            isinstance(runtime_parent, type)
+            and issubclass(runtime_parent, tuple)
+            and hasattr(runtime_parent, "_fields")
+        ):
+            return updated_node
+
         return updated_node.with_changes(
-            body=visit_suite(
+            body=add_attribute_docstrings(
                 updated_node.body,
                 runtime_parent=self.runtime_parents[-1],
                 blacklisted_objects=self.blacklisted_objects,
@@ -560,7 +575,7 @@ SuiteItemT = TypeVar(
 )
 
 
-def visit_suite(
+def add_attribute_docstrings(
     body: Sequence[SuiteItemT],
     *,
     runtime_parent: RuntimeParent,
@@ -646,6 +661,7 @@ def visit_suite(
                     types.BuiltinFunctionType,
                     types.ModuleType,
                     types.GenericAlias,
+                    types.MethodWrapperType,
                 ),
             ):
                 continue
@@ -657,12 +673,18 @@ def visit_suite(
                     textwrap.indent(docstring, prefix=indentation_string).lstrip()
                     + indentation_string
                 )
+            else:
+                indentation_string = None
 
             new_body.append(
                 libcst.SimpleStatementLine(
                     body=[
                         libcst.Expr(
-                            libcst.SimpleString(triple_quoted_docstring(docstring))
+                            libcst.SimpleString(
+                                triple_quoted_docstring(
+                                    docstring, indentation=indentation_string
+                                )
+                            )
                         )
                     ]
                 )
@@ -776,7 +798,7 @@ def add_docstrings_to_stub(
         parsed_module = libcst.parse_module(stub_source)
 
     parsed_module = parsed_module.with_changes(
-        body=visit_suite(
+        body=add_attribute_docstrings(
             parsed_module.body,
             runtime_parent=RuntimeParent(module_name, RuntimeValue(runtime_module)),
             blacklisted_objects=blacklisted_objects,
