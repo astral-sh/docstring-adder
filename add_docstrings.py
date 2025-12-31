@@ -121,7 +121,7 @@ def log(*objects: object) -> None:
 DocumentableT = TypeVar("DocumentableT", libcst.ClassDef, libcst.FunctionDef)
 
 
-def triple_quoted_docstring(content: str) -> str:
+def triple_quoted_docstring(content: str, indentation: str | None = None) -> str:
     """Escape the docstring and return it as a triple-quoted string.
 
     Logic adapted from `ast.unparse()` internals.
@@ -139,8 +139,20 @@ def triple_quoted_docstring(content: str) -> str:
 
     # In general we try to tamper with the content as little as possible,
     # but this generally leads to more consistent and more readable docstrings.
-    if "\n" in content and not content.rstrip(" \t").endswith("\n"):
-        content += "\n"
+    newline_count = content.count("\n")
+    if newline_count > 0:
+        ends_with_newline = content.rstrip(" \t").endswith("\n")
+        if ends_with_newline:
+            if (
+                newline_count == 1
+                and content.strip()
+                and content.rstrip(" \t")[-2] not in {'"', "'"}
+            ):
+                content = content.rstrip(" \t").removesuffix("\n")
+        else:
+            content = content.rstrip(" \t") + "\n"
+            if indentation is not None:
+                content += indentation
 
     escaped_string = "".join(map(escape_char, content))
 
@@ -375,7 +387,27 @@ class DocstringAdder(libcst.CSTTransformer):
     ) -> libcst.IndentedBlock:
         """Hook called after an `IndentedBlock` node has been visited and, possibly, modified."""
         self.suite_visitation_stack.pop()
-        return updated_node
+
+        # Don't add attribute docstrings to fields in `NamedTuple` classes.
+        # The generated docstrings for the properties in these classes
+        # are always things like "Alias for field number 0", which clutter
+        # the stubs and aren't useful.
+        runtime_parent = self.runtime_parents[-1].value.inner
+        if (
+            isinstance(runtime_parent, type)
+            and issubclass(runtime_parent, tuple)
+            and hasattr(runtime_parent, "_fields")
+        ):
+            return updated_node
+
+        return updated_node.with_changes(
+            body=add_attribute_docstrings(
+                updated_node.body,
+                runtime_parent=self.runtime_parents[-1],
+                blacklisted_objects=self.blacklisted_objects,
+                indentation=len(self.suite_visitation_stack),
+            )
+        )
 
     @override
     def leave_If(self, original_node: libcst.If, updated_node: libcst.If) -> libcst.If:
@@ -546,6 +578,162 @@ def get_runtime_docstring(runtime: RuntimeValue) -> str | None:
     return runtime_docstring
 
 
+SuiteItemT = TypeVar(
+    "SuiteItemT",
+    "libcst.SimpleStatementLine | libcst.BaseCompoundStatement",
+    "libcst.BaseSmallStatement | libcst.BaseStatement",
+)
+
+
+def add_attribute_docstrings(
+    body: Sequence[SuiteItemT],
+    *,
+    runtime_parent: RuntimeParent,
+    blacklisted_objects: frozenset[str],
+    indentation: int,
+) -> list[SuiteItemT]:
+    """Add Sphinx-style 'attribute docstrings' to assignments in a suite.
+
+    The suite could be the body of a module, class, function,
+    `if` block, `elif` block, or `else` block.
+    """
+    new_body: list[SuiteItemT] = []
+    added_docstring_to_previous = False
+    for statement, next_statement in itertools.zip_longest(body, body[1:]):
+        # If we just added a docstring to the previous statement,
+        # add a blank line before this statement.
+        # Black will not do this for us.
+        if (
+            added_docstring_to_previous
+            and isinstance(
+                statement, (libcst.SimpleStatementLine, libcst.BaseCompoundStatement)
+            )
+            and all(line.comment is not None for line in statement.leading_lines)
+        ):
+            new_body.append(
+                statement.with_changes(
+                    leading_lines=[libcst.EmptyLine(), *statement.leading_lines]  # type: ignore[has-type]
+                )
+            )
+        else:
+            new_body.append(statement)
+
+        added_docstring_to_previous = False
+
+        # If it's an annotated assignment that we could potentially add a docstring to...
+        if (
+            isinstance(statement, libcst.SimpleStatementLine)
+            and len(statement.body) == 1
+            # ... and there is no docstring already present...
+            and not (
+                isinstance(next_statement, libcst.SimpleStatementLine)
+                and len(next_statement.body) == 1
+                and isinstance(next_statement.body[0], libcst.Expr)
+                and isinstance(next_statement.body[0].value, libcst.SimpleString)
+            )
+        ):
+            assignment = statement.body[0]
+            if isinstance(assignment, libcst.AnnAssign):
+                target = assignment.target
+            elif isinstance(assignment, libcst.Assign) and len(assignment.targets) == 1:
+                target = assignment.targets[0].target
+            else:
+                continue
+
+            if not isinstance(target, libcst.Name):
+                continue
+
+            # ... then try to add a docstring to it.
+            runtime_name = target.value
+            if f"{runtime_parent.name}.{runtime_name}" in blacklisted_objects:
+                continue
+
+            runtime_value = get_runtime_object_for_stub(runtime_name, runtime_parent)
+
+            if runtime_value is None:
+                continue
+
+            # Heuristics to avoid adding undesirable attribute docstrings.
+            #
+            # For example, if it's an unannotated assignment to a
+            # class/function/module, or it's likely to be a type alias to a
+            # class, there's no need to add an attribute docstring to the
+            # variable: type checkers should pick up the docstring anyway.
+            #
+            # We also avoid adding docstrings to `Assign`/`AnnAssign` nodes
+            # where the runtime value is a class/function that comes from
+            # a different module. It's usually undesirable to add docstrings
+            # for these attributes.
+            if isinstance(runtime_value.inner, types.ModuleType):
+                continue
+            if isinstance(
+                runtime_value.inner,
+                (
+                    type,
+                    types.FunctionType,
+                    types.BuiltinFunctionType,
+                    types.GenericAlias,
+                    types.MethodWrapperType,
+                ),
+            ):
+                if isinstance(assignment, libcst.Assign):
+                    continue
+                if assignment.value is not None:
+                    continue
+                try:
+                    runtime_module = runtime_value.inner.__module__
+                except Exception:
+                    pass
+                else:
+                    if isinstance(runtime_parent.value.inner, types.ModuleType):
+                        parent_module = runtime_parent.value.inner.__name__
+                    else:
+                        try:
+                            parent_module = runtime_parent.value.inner.__module__
+                        except Exception:
+                            parent_module = None
+                    if parent_module is not None and runtime_module != parent_module:
+                        continue
+
+            docstring = get_runtime_docstring(runtime_value)
+            if docstring is None:
+                continue
+
+            docstring = docstring.strip(" \t")
+            docstring_lines = docstring.split("\n")
+            docstring = "\n".join([
+                docstring_lines[0],
+                textwrap.dedent("\n".join(docstring_lines[1:])),
+            ])
+
+            # If we're visiting an indented block, indent the docstring
+            if indentation and "\n" in docstring:
+                indentation_string = " " * indentation * 4
+                docstring = (
+                    textwrap.indent(docstring, prefix=indentation_string)
+                    + indentation_string
+                ).lstrip(" \t")
+            else:
+                indentation_string = None
+
+            new_body.append(
+                libcst.SimpleStatementLine(
+                    body=[
+                        libcst.Expr(
+                            libcst.SimpleString(
+                                triple_quoted_docstring(
+                                    docstring, indentation=indentation_string
+                                )
+                            )
+                        )
+                    ]
+                )
+            )
+            added_docstring_to_previous = True
+
+    return new_body
+
+
 class NOT_FOUND:
     """Sentinel to indicate the runtime object for a stub definition could not be found.
 
@@ -628,146 +816,6 @@ def add_docstrings_to_stub(
 ) -> None:
     """Add docstrings to a stub module and all functions/classes in it."""
 
-    T = TypeVar(
-        "T",
-        "libcst.SimpleStatementLine | libcst.BaseCompoundStatement",
-        "libcst.BaseSmallStatement | libcst.BaseStatement",
-    )
-
-    def visit_module_suite(
-        module_name: str, body: Sequence[T], *, indentation: int = 0
-    ) -> list[T]:
-        """Add Sphinx-style 'attribute docstrings' to assignments in a module body.
-
-        We also recurse into the body of `if`/`elif`/`else` blocks.
-        """
-        new_body: list[T] = []
-        added_docstring_to_previous = False
-        for statement, next_statement in itertools.zip_longest(body, body[1:]):
-            # recurse into `if`, `else` and `elif` blocks
-            if isinstance(statement, libcst.If):
-                body = visit_module_suite(
-                    module_name,
-                    statement.body.body,  # type: ignore[arg-type]
-                    indentation=indentation + 1,
-                )
-                orelse = statement.orelse and statement.orelse.with_changes(
-                    body=statement.orelse.body.with_changes(
-                        body=visit_module_suite(
-                            module_name,
-                            statement.orelse.body.body,
-                            indentation=indentation + 1,
-                        )
-                    )
-                )
-                statement = statement.with_changes(
-                    body=statement.body.with_changes(body=body), orelse=orelse
-                )
-
-            # If we just added a docstring to the previous statement,
-            # add a blank line before this statement.
-            # Black will not do this for us.
-            if (
-                added_docstring_to_previous
-                and isinstance(
-                    statement,
-                    (libcst.SimpleStatementLine, libcst.BaseCompoundStatement),
-                )
-                and all(line.comment is not None for line in statement.leading_lines)
-            ):
-                new_body.append(
-                    statement.with_changes(
-                        leading_lines=[libcst.EmptyLine(), *statement.leading_lines]  # type: ignore[has-type]
-                    )
-                )
-            else:
-                new_body.append(statement)
-
-            added_docstring_to_previous = False
-
-            # If it's an annotated assignment that we could potentially add a docstring to...
-            if (
-                isinstance(statement, libcst.SimpleStatementLine)
-                and len(statement.body) == 1
-                # ... and there is no docstring already present...
-                and not (
-                    isinstance(next_statement, libcst.SimpleStatementLine)
-                    and len(next_statement.body) == 1
-                    and isinstance(next_statement.body[0], libcst.Expr)
-                    and isinstance(next_statement.body[0].value, libcst.SimpleString)
-                )
-            ):
-                assignment = statement.body[0]
-                if isinstance(assignment, libcst.AnnAssign):
-                    target = assignment.target
-                elif (
-                    isinstance(assignment, libcst.Assign)
-                    and len(assignment.targets) == 1
-                ):
-                    target = assignment.targets[0].target
-                else:
-                    continue
-
-                if not isinstance(target, libcst.Name):
-                    continue
-
-                # ... then try to add a docstring to it.
-                runtime_name = target.value
-                if (module_name + runtime_name) in blacklisted_objects:
-                    continue
-
-                runtime_value = get_runtime_object_for_stub(
-                    runtime_name,
-                    RuntimeParent(name=module_name, value=RuntimeValue(runtime_module)),
-                )
-
-                if runtime_value is None:
-                    continue
-
-                docstring = get_runtime_docstring(runtime_value)
-                if docstring is None:
-                    continue
-
-                # If it's an unannotated assignment to a class/function/module,
-                # or it's likely to be a type alias to a class,
-                # there's no need to add an attribute docstring to the variable:
-                # type checkers should pick up the docstring anyway.
-                if (
-                    isinstance(assignment, libcst.Assign)
-                    or assignment.value is not None
-                ) and isinstance(
-                    runtime_value.inner,
-                    (
-                        type,
-                        types.FunctionType,
-                        types.BuiltinFunctionType,
-                        types.ModuleType,
-                        types.GenericAlias,
-                    ),
-                ):
-                    continue
-
-                # If we're visiting an indented block, indent the docstring
-                if indentation and "\n" in docstring:
-                    indentation_string = " " * indentation * 4
-                    docstring = (
-                        textwrap.indent(docstring, prefix=indentation_string).lstrip()
-                        + indentation_string
-                    )
-
-                new_body.append(
-                    libcst.SimpleStatementLine(
-                        body=[
-                            libcst.Expr(
-                                libcst.SimpleString(triple_quoted_docstring(docstring))
-                            )
-                        ]
-                    )
-                )
-                added_docstring_to_previous = True
-
-        return new_body
-
     print(f"Processing {module_name}... ", flush=True)
     try:
         # Redirect stdout when importing modules to avoid noisy output from modules like `this`
@@ -790,7 +838,12 @@ def add_docstrings_to_stub(
         parsed_module = libcst.parse_module(stub_source)
 
     parsed_module = parsed_module.with_changes(
-        body=visit_module_suite(module_name, parsed_module.body)
+        body=add_attribute_docstrings(
+            parsed_module.body,
+            runtime_parent=RuntimeParent(module_name, RuntimeValue(runtime_module)),
+            blacklisted_objects=blacklisted_objects,
+            indentation=0,
+        )
     )
 
     transformer = DocstringAdder(
