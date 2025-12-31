@@ -697,7 +697,7 @@ def add_attribute_docstrings(
                 docstring = (
                     textwrap.indent(docstring, prefix=indentation_string)
                     + indentation_string
-                )
+                ).lstrip(" \t")
             else:
                 indentation_string = None
 
