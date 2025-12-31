@@ -565,7 +565,10 @@ def get_runtime_docstring(runtime: RuntimeValue) -> str | None:
     ):
         return None
 
-    if runtime_docstring.endswith("\n") and runtime_docstring.count("\n") == 1:
+    if (
+        runtime_docstring.rstrip(" \t").endswith("\n")
+        and runtime_docstring.count("\n") == 1
+    ):
         runtime_docstring = runtime_docstring.rstrip()
 
     return runtime_docstring
@@ -671,15 +674,25 @@ def add_attribute_docstrings(
                     types.GenericAlias,
                     types.MethodWrapperType,
                 ),
-            ) and (
-                isinstance(assignment, libcst.Assign)
-                or assignment.value is not None
-                or (
-                    getattr(runtime_value.inner, "__module__", None)
-                    != getattr(runtime_parent.value.inner, "__module__", None)
-                )
             ):
-                continue
+                if isinstance(assignment, libcst.Assign):
+                    continue
+                if assignment.value is not None:
+                    continue
+                try:
+                    runtime_module = runtime_value.inner.__module__
+                except Exception:
+                    pass
+                else:
+                    if isinstance(runtime_parent.value.inner, types.ModuleType):
+                        parent_module = runtime_parent.value.inner.__name__
+                    else:
+                        try:
+                            parent_module = runtime_parent.value.inner.__module__
+                        except Exception:
+                            parent_module = None
+                    if parent_module is not None and runtime_module != parent_module:
+                        continue
 
             # If we're visiting an indented block, indent the docstring
             if indentation and "\n" in docstring:
