@@ -143,7 +143,11 @@ def triple_quoted_docstring(content: str, indentation: str | None = None) -> str
     if newline_count > 0:
         ends_with_newline = content.rstrip(" \t").endswith("\n")
         if ends_with_newline:
-            if newline_count == 1:
+            if (
+                newline_count == 1
+                and content.strip()
+                and content.rstrip(" \t")[-2] not in {'"', "'"}
+            ):
                 content = content.rstrip(" \t").removesuffix("\n")
         else:
             content = content.rstrip(" \t") + "\n"
