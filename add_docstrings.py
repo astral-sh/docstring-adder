@@ -585,6 +585,17 @@ SuiteItemT = TypeVar(
 )
 
 
+def final_statement_of_if(
+    node: libcst.If,
+) -> libcst.BaseStatement | libcst.BaseSmallStatement:
+    """Retrieve the final statement of an `if`/`elif`/`else` chain."""
+    if node.orelse is None:
+        return node.body.body[-1]
+    if isinstance(node.orelse, libcst.Else):
+        return node.orelse.body.body[-1]
+    return final_statement_of_if(node.orelse)
+
+
 def add_attribute_docstrings(
     body: Sequence[SuiteItemT],
     *,
@@ -619,6 +630,17 @@ def add_attribute_docstrings(
             new_body.append(statement)
 
         added_docstring_to_previous = False
+
+        if isinstance(statement, libcst.If):
+            final_line = final_statement_of_if(statement)
+            if (
+                isinstance(final_line, libcst.SimpleStatementLine)
+                and len(final_line.body) == 1
+                and isinstance(final_line.body[0], libcst.Expr)
+                and isinstance(final_line.body[0].value, libcst.SimpleString)
+            ):
+                added_docstring_to_previous = True
+                continue
 
         # If it's an annotated assignment that we could potentially add a docstring to...
         if (
@@ -837,6 +859,14 @@ def add_docstrings_to_stub(
         stub_source = docstring + stub_source if stub_source.strip() else docstring
         parsed_module = libcst.parse_module(stub_source)
 
+    transformer = DocstringAdder(
+        module_name=module_name,
+        runtime_module=runtime_module,
+        stub_file_path=path,
+        typeshed_client_context=context,
+        blacklisted_objects=blacklisted_objects,
+    )
+    parsed_module = parsed_module.visit(transformer)
     parsed_module = parsed_module.with_changes(
         body=add_attribute_docstrings(
             parsed_module.body,
@@ -845,15 +875,7 @@ def add_docstrings_to_stub(
             indentation=0,
         )
     )
-
-    transformer = DocstringAdder(
-        module_name=module_name,
-        runtime_module=runtime_module,
-        stub_file_path=path,
-        typeshed_client_context=context,
-        blacklisted_objects=blacklisted_objects,
-    )
-    new_module = parsed_module.visit(transformer).code
+    new_module = parsed_module.code
     path.write_text(new_module, encoding="utf-8")
 
     check_no_destructive_changes(
