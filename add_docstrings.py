@@ -140,7 +140,7 @@ def triple_quoted_docstring(content: str, indentation: str | None = None) -> str
     # In general we try to tamper with the content as little as possible,
     # but this generally leads to more consistent and more readable docstrings.
     if "\n" in content and not content.rstrip(" \t").endswith("\n"):
-        content += "\n"
+        content = content.rstrip(" \t") + "\n"
         if indentation is not None:
             content += indentation
 
@@ -565,12 +565,6 @@ def get_runtime_docstring(runtime: RuntimeValue) -> str | None:
     ):
         return None
 
-    if (
-        runtime_docstring.rstrip(" \t").endswith("\n")
-        and runtime_docstring.count("\n") == 1
-    ):
-        runtime_docstring = runtime_docstring.rstrip()
-
     return runtime_docstring
 
 
@@ -649,10 +643,6 @@ def add_attribute_docstrings(
             if runtime_value is None:
                 continue
 
-            docstring = get_runtime_docstring(runtime_value)
-            if docstring is None:
-                continue
-
             # Heuristics to avoid adding undesirable attribute docstrings.
             #
             # For example, if it's an unannotated assignment to a
@@ -664,13 +654,14 @@ def add_attribute_docstrings(
             # where the runtime value is a class/function that comes from
             # a different module. It's usually undesirable to add docstrings
             # for these attributes.
+            if isinstance(runtime_value.inner, types.ModuleType):
+                continue
             if isinstance(
                 runtime_value.inner,
                 (
                     type,
                     types.FunctionType,
                     types.BuiltinFunctionType,
-                    types.ModuleType,
                     types.GenericAlias,
                     types.MethodWrapperType,
                 ),
@@ -694,11 +685,17 @@ def add_attribute_docstrings(
                     if parent_module is not None and runtime_module != parent_module:
                         continue
 
+            docstring = get_runtime_docstring(runtime_value)
+            if docstring is None:
+                continue
+
+            docstring = docstring.strip(" \t")
+
             # If we're visiting an indented block, indent the docstring
             if indentation and "\n" in docstring:
                 indentation_string = " " * indentation * 4
                 docstring = (
-                    textwrap.indent(docstring, prefix=indentation_string).lstrip()
+                    textwrap.indent(docstring, prefix=indentation_string)
                     + indentation_string
                 )
             else:

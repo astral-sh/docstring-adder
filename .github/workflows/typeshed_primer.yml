@@ -16,7 +16,7 @@ env:
 jobs:
   typeshed_primer:
     timeout-minutes: 5
-    runs-on: depot-ubuntu-24.04-4
+    runs-on: depot-ubuntu-latest-8
     permissions:
       contents: read
     steps:
