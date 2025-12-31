@@ -556,7 +556,7 @@ SuiteItemT = TypeVar(
 def visit_module_suite(
     body: Sequence[SuiteItemT],
     *,
-    runtime_module: types.ModuleType,
+    runtime_parent: RuntimeParent,
     blacklisted_objects: frozenset[str],
     indentation: int = 0,
 ) -> list[SuiteItemT]:
@@ -571,7 +571,7 @@ def visit_module_suite(
         if isinstance(statement, libcst.If):
             body = visit_module_suite(
                 statement.body.body,  # type: ignore[arg-type]
-                runtime_module=runtime_module,
+                runtime_parent=runtime_parent,
                 blacklisted_objects=blacklisted_objects,
                 indentation=indentation + 1,
             )
@@ -579,7 +579,7 @@ def visit_module_suite(
                 body=statement.orelse.body.with_changes(
                     body=visit_module_suite(
                         statement.orelse.body.body,
-                        runtime_module=runtime_module,
+                        runtime_parent=runtime_parent,
                         blacklisted_objects=blacklisted_objects,
                         indentation=indentation + 1,
                     )
@@ -634,14 +634,10 @@ def visit_module_suite(
 
             # ... then try to add a docstring to it.
             runtime_name = target.value
-            module_name = runtime_module.__name__
-            if (module_name + "." + runtime_name) in blacklisted_objects:
+            if f"{runtime_parent.name}.{runtime_name}" in blacklisted_objects:
                 continue
 
-            runtime_value = get_runtime_object_for_stub(
-                runtime_name,
-                RuntimeParent(name=module_name, value=RuntimeValue(runtime_module)),
-            )
+            runtime_value = get_runtime_object_for_stub(runtime_name, runtime_parent)
 
             if runtime_value is None:
                 continue
@@ -796,7 +792,7 @@ def add_docstrings_to_stub(
     parsed_module = parsed_module.with_changes(
         body=visit_module_suite(
             parsed_module.body,
-            runtime_module=runtime_module,
+            runtime_parent=RuntimeParent(module_name, RuntimeValue(runtime_module)),
             blacklisted_objects=blacklisted_objects,
         )
     )
