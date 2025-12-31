@@ -375,7 +375,14 @@ class DocstringAdder(libcst.CSTTransformer):
     ) -> libcst.IndentedBlock:
         """Hook called after an `IndentedBlock` node has been visited and, possibly, modified."""
         self.suite_visitation_stack.pop()
-        return updated_node
+        return updated_node.with_changes(
+            body=visit_suite(
+                updated_node.body,
+                runtime_parent=self.runtime_parents[-1],
+                blacklisted_objects=self.blacklisted_objects,
+                indentation=len(self.suite_visitation_stack),
+            )
+        )
 
     @override
     def leave_If(self, original_node: libcst.If, updated_node: libcst.If) -> libcst.If:
@@ -553,42 +560,21 @@ SuiteItemT = TypeVar(
 )
 
 
-def visit_module_suite(
+def visit_suite(
     body: Sequence[SuiteItemT],
     *,
     runtime_parent: RuntimeParent,
     blacklisted_objects: frozenset[str],
-    indentation: int = 0,
+    indentation: int,
 ) -> list[SuiteItemT]:
-    """Add Sphinx-style 'attribute docstrings' to assignments in a module body.
+    """Add Sphinx-style 'attribute docstrings' to assignments in a suite.
 
-    We also recurse into the body of `if`/`elif`/`else` blocks.
+    The suite could be the body of a module, class, function,
+    `if` block, `elif` block, or `else` block.
     """
     new_body: list[SuiteItemT] = []
     added_docstring_to_previous = False
     for statement, next_statement in itertools.zip_longest(body, body[1:]):
-        # recurse into `if`, `else` and `elif` blocks
-        if isinstance(statement, libcst.If):
-            body = visit_module_suite(
-                statement.body.body,  # type: ignore[arg-type]
-                runtime_parent=runtime_parent,
-                blacklisted_objects=blacklisted_objects,
-                indentation=indentation + 1,
-            )
-            orelse = statement.orelse and statement.orelse.with_changes(
-                body=statement.orelse.body.with_changes(
-                    body=visit_module_suite(
-                        statement.orelse.body.body,
-                        runtime_parent=runtime_parent,
-                        blacklisted_objects=blacklisted_objects,
-                        indentation=indentation + 1,
-                    )
-                )
-            )
-            statement = statement.with_changes(
-                body=statement.body.with_changes(body=body), orelse=orelse
-            )
-
         # If we just added a docstring to the previous statement,
         # add a blank line before this statement.
         # Black will not do this for us.
@@ -790,10 +776,11 @@ def add_docstrings_to_stub(
         parsed_module = libcst.parse_module(stub_source)
 
     parsed_module = parsed_module.with_changes(
-        body=visit_module_suite(
+        body=visit_suite(
             parsed_module.body,
             runtime_parent=RuntimeParent(module_name, RuntimeValue(runtime_module)),
             blacklisted_objects=blacklisted_objects,
+            indentation=0,
         )
     )
 
