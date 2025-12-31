@@ -669,10 +669,10 @@ def add_attribute_docstrings(
             # If we're visiting an indented block, indent the docstring
             if indentation and "\n" in docstring:
                 indentation_string = " " * indentation * 4
-                docstring = (
-                    textwrap.indent(docstring, prefix=indentation_string).lstrip()
-                    + indentation_string
+                docstring = textwrap.indent(
+                    textwrap.dedent(docstring), prefix=indentation_string
                 )
+                docstring = f"{docstring.lstrip()}{indentation_string}"
             else:
                 indentation_string = None
 
