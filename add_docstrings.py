@@ -139,10 +139,16 @@ def triple_quoted_docstring(content: str, indentation: str | None = None) -> str
 
     # In general we try to tamper with the content as little as possible,
     # but this generally leads to more consistent and more readable docstrings.
-    if "\n" in content and not content.rstrip(" \t").endswith("\n"):
-        content = content.rstrip(" \t") + "\n"
-        if indentation is not None:
-            content += indentation
+    newline_count = content.count("\n")
+    if newline_count > 0:
+        ends_with_newline = content.rstrip(" \t").endswith("\n")
+        if ends_with_newline:
+            if newline_count == 1:
+                content = content.strip()
+        else:
+            content = content.rstrip(" \t") + "\n"
+            if indentation is not None:
+                content += indentation
 
     escaped_string = "".join(map(escape_char, content))
 
