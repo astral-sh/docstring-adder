@@ -98,7 +98,7 @@ import sys
 import textwrap
 import types
 import typing
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
@@ -616,10 +616,12 @@ def add_attribute_docstrings(
         # Black will not do this for us.
         if (
             added_docstring_to_previous
-            and isinstance(
-                statement, (libcst.SimpleStatementLine, libcst.BaseCompoundStatement)
+            and hasattr(statement, "leading_lines")
+            and isinstance(statement.leading_lines, Iterable)
+            and all(
+                isinstance(line, libcst.EmptyLine) and line.comment is not None
+                for line in statement.leading_lines
             )
-            and all(line.comment is not None for line in statement.leading_lines)
         ):
             new_body.append(
                 statement.with_changes(
@@ -633,14 +635,24 @@ def add_attribute_docstrings(
 
         if isinstance(statement, libcst.If):
             final_line = final_statement_of_if(statement)
-            if (
-                isinstance(final_line, libcst.SimpleStatementLine)
-                and len(final_line.body) == 1
-                and isinstance(final_line.body[0], libcst.Expr)
-                and isinstance(final_line.body[0].value, libcst.SimpleString)
-            ):
-                added_docstring_to_previous = True
-                continue
+        elif isinstance(statement, (libcst.FunctionDef, libcst.ClassDef)):
+            final_line = (
+                final_statement_of_if(statement.body.body[-1])
+                if isinstance(statement.body.body[-1], libcst.If)
+                else statement.body.body[-1]
+            )
+        else:
+            final_line = None
+
+        if (
+            final_line is not None
+            and isinstance(final_line, libcst.SimpleStatementLine)
+            and len(final_line.body) == 1
+            and isinstance(final_line.body[0], libcst.Expr)
+            and isinstance(final_line.body[0].value, libcst.SimpleString)
+        ):
+            added_docstring_to_previous = True
+            continue
 
         # If it's an annotated assignment that we could potentially add a docstring to...
         if (
