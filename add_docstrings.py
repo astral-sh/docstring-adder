@@ -667,7 +667,8 @@ def add_attribute_docstrings(
 
             # ... then try to add a docstring to it.
             runtime_name = target.value
-            if f"{runtime_parent.name}.{runtime_name}" in blacklisted_objects:
+            runtime_fullname = f"{runtime_parent.name}.{runtime_name}"
+            if runtime_fullname in blacklisted_objects:
                 continue
 
             runtime_value = get_runtime_object_for_stub(runtime_name, runtime_parent)
@@ -675,19 +676,14 @@ def add_attribute_docstrings(
             if runtime_value is None:
                 continue
 
-            # Heuristics to avoid adding undesirable attribute docstrings.
-            #
-            # For example, if it's an unannotated assignment to a
-            # class/function/module, or it's likely to be a type alias to a
-            # class, there's no need to add an attribute docstring to the
-            # variable: type checkers should pick up the docstring anyway.
-            #
-            # We also avoid adding docstrings to `Assign`/`AnnAssign` nodes
-            # where the runtime value is a class/function that comes from
-            # a different module. It's usually undesirable to add docstrings
-            # for these attributes.
+            # -------------------------------------------------------------------------
+            # BEGINNING of heuristics to avoid adding undesirable attribute docstrings.
+            # -------------------------------------------------------------------------
+
+            # Don't add the module docstring of `some_module` below `x = some_module`
             if isinstance(runtime_value.inner, types.ModuleType):
                 continue
+
             if isinstance(
                 runtime_value.inner,
                 (
@@ -698,10 +694,31 @@ def add_attribute_docstrings(
                     types.MethodWrapperType,
                 ),
             ):
+                # Don't add the function docstring below `x = some_function`
                 if isinstance(assignment, libcst.Assign):
                     continue
+
+                # Don't add the docstring for `dict` below `x: TypeAlias = dict[str, Any]`
                 if assignment.value is not None:
                     continue
+
+                # Don't add docstrings to things that look like `x: type[Foo]`
+                # if the runtime value is a class.
+                # Also, don't add docstrings to things that look like `x: Callable[..., Foo]`
+                # if the runtime value is a function.
+                #
+                # ... But exclude `typing.Generic` here.
+                # It's annotated with `Generic: type[_Generic]` in typeshed,
+                # at least currently, and that's an *extremely* useful docstring :-(
+                if (
+                    isinstance(runtime_value.inner, (type, types.FunctionType))
+                    and isinstance(assignment.annotation.annotation, libcst.Subscript)
+                    and runtime_fullname != "typing.Generic"
+                ):
+                    continue
+
+                # Don't add the docstring for a function or class below `x: Foo`
+                # if the runtime function or class comes from another module
                 try:
                     runtime_module = runtime_value.inner.__module__
                 except Exception:
@@ -716,6 +733,10 @@ def add_attribute_docstrings(
                             parent_module = None
                     if parent_module is not None and runtime_module != parent_module:
                         continue
+
+            # --------------------------------------------------------------------
+            # END heuristics for avoiding adding undesirable attribute docstrings.
+            # --------------------------------------------------------------------
 
             docstring = get_runtime_docstring(runtime_value)
             if docstring is None:
