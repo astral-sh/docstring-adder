@@ -609,38 +609,8 @@ def add_attribute_docstrings(
     `if` block, `elif` block, or `else` block.
     """
     new_body: list[SuiteItemT] = []
-    added_docstring_to_previous = False
     for statement, next_statement in itertools.zip_longest(body, body[1:]):
-        # If we just added a docstring to the previous statement,
-        # add a blank line before this statement.
-        # Black will not do this for us.
-        if (
-            added_docstring_to_previous
-            and isinstance(
-                statement, (libcst.SimpleStatementLine, libcst.BaseCompoundStatement)
-            )
-            and all(line.comment is not None for line in statement.leading_lines)
-        ):
-            new_body.append(
-                statement.with_changes(
-                    leading_lines=[libcst.EmptyLine(), *statement.leading_lines]  # type: ignore[has-type]
-                )
-            )
-        else:
-            new_body.append(statement)
-
-        added_docstring_to_previous = False
-
-        if isinstance(statement, libcst.If):
-            final_line = final_statement_of_if(statement)
-            if (
-                isinstance(final_line, libcst.SimpleStatementLine)
-                and len(final_line.body) == 1
-                and isinstance(final_line.body[0], libcst.Expr)
-                and isinstance(final_line.body[0].value, libcst.SimpleString)
-            ):
-                added_docstring_to_previous = True
-                continue
+        new_body.append(statement)
 
         # If it's an annotated assignment that we could potentially add a docstring to...
         if (
@@ -751,7 +721,6 @@ def add_attribute_docstrings(
                     ]
                 )
             )
-            added_docstring_to_previous = True
 
     return new_body
 
