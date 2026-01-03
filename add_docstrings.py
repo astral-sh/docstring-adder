@@ -257,6 +257,33 @@ class DocstringAdder(libcst.CSTTransformer):
         # just like any indented block.
         self.suite_visitation_stack: list[set[str]] = [set()]
 
+        self.if_stack: list[list[tuple[libcst.If, bool] | None]] = []
+
+    def visiting_reachable_code(self) -> bool:
+        """Return `True` if we're currently visiting reachable code."""
+        if not self.if_stack:
+            return True
+        for stack in self.if_stack:
+            # these are the entries for already-visited `if`/`elif` statements
+            # in the current chain. In order for the branch we are currently
+            # visiting to be reachable, all of these must have evaluated to `False`.
+            for entry in stack[:-1]:
+                assert entry is not None
+                _, truthiness_of_test = entry
+                if truthiness_of_test:
+                    return False
+
+            last_entry = stack[-1]
+            if last_entry is None:
+                # we're visiting the `else` branch of an `if`/`elif`/`else` chain
+                continue
+            else:
+                # we're visiting an `if` or `elif` branch
+                _, truthiness_of_test = last_entry
+                if not truthiness_of_test:
+                    return False
+        return True
+
     def maybe_mangled_name(self, name: str) -> str:
         """Apply name mangling to `name`, if it is necessary.
 
@@ -343,7 +370,8 @@ class DocstringAdder(libcst.CSTTransformer):
         return f"{parent_fullname}.{mangled_name}"
 
     def _log_runtime_object_not_found(self, name: str) -> None:
-        log(f"Could not find {self.object_fullname(name)} at runtime")
+        if self.visiting_reachable_code():
+            log(f"Could not find {self.object_fullname(name)} at runtime")
 
     @override
     def leave_FunctionDef(
@@ -388,6 +416,9 @@ class DocstringAdder(libcst.CSTTransformer):
         """Hook called after an `IndentedBlock` node has been visited and, possibly, modified."""
         self.suite_visitation_stack.pop()
 
+        if not self.visiting_reachable_code():
+            return updated_node
+
         # Don't add attribute docstrings to fields in `NamedTuple` classes.
         # The generated docstrings for the properties in these classes
         # are always things like "Alias for field number 0", which clutter
@@ -410,28 +441,14 @@ class DocstringAdder(libcst.CSTTransformer):
         )
 
     @override
-    def leave_If(self, original_node: libcst.If, updated_node: libcst.If) -> libcst.If:
-        """Hook called when the transformer leaves an `if` statement.
+    def visit_If(self, node: libcst.If) -> None:
+        """Hook called when the transformer visits an `if` statement.
 
-        All sub-statements and sub-expressions inside the `if` statement
-        will already have been visited (and, possibly, modified) by the
-        transformer. This method discards any changes that may have been
-        made to branches of code that are unreachable on the platform
-        and Python version docstring-adder is being run on.
-
-        See the module-level docstring for why we do this, and caveats
-        regarding how we evaluate the truthiness of the `if` test.
-
-        It might theoretically be possible to add more state to the
-        transformer so that we avoid making the undesirable changes in
-        the first place, rather than applying the undesirable changes and
-        then discarding them later on. This approach seems to work well
-        enough for now, however, and is simpler.
+        This method evaluates the truthiness of the `if` test using
+        `typeshed_client` APIs, and updates `self.if_stack` accordingly.
         """
         condition_as_libcst_module = libcst.Module(
-            body=[
-                libcst.SimpleStatementLine(body=[libcst.Expr(value=original_node.test)])
-            ]
+            body=[libcst.SimpleStatementLine(body=[libcst.Expr(value=node.test)])]
         )
         condition_as_ast_expr = ast.parse(condition_as_libcst_module.code).body[0]
         assert isinstance(condition_as_ast_expr, ast.Expr)
@@ -441,15 +458,41 @@ class DocstringAdder(libcst.CSTTransformer):
             file_path=self.stub_file_path,
         )
         assert isinstance(parsed_condition, bool)
-        if parsed_condition:
-            return updated_node.with_changes(orelse=original_node.orelse)
+
+        if (
+            self.if_stack
+            and self.if_stack[-1][-1]
+            and self.if_stack[-1][-1][0].orelse is node
+        ):
+            self.if_stack[-1].append((node, parsed_condition))
         else:
-            return updated_node.with_changes(body=original_node.body)
+            self.if_stack.append([(node, parsed_condition)])
+
+    @override
+    def leave_If(self, original_node: libcst.If, updated_node: libcst.If) -> libcst.If:
+        """Hook called when the transformer leaves an `if` statement."""
+        self.if_stack[-1].pop()
+        if not self.if_stack[-1]:
+            self.if_stack.pop()
+        return updated_node
+
+    @override
+    def visit_Else(self, node: libcst.Else) -> None:
+        self.if_stack[-1].append(None)
+
+    @override
+    def leave_Else(
+        self, original_node: libcst.Else, updated_node: libcst.Else
+    ) -> libcst.Else:
+        self.if_stack[-1].pop()
+        return updated_node
 
     def document_class_or_function(
         self, updated_node: DocumentableT, runtime_object: RuntimeValue
     ) -> DocumentableT:
         """Attempt to add a docstring to a class or function definition."""
+        if not self.visiting_reachable_code():
+            return updated_node
 
         object_fullname = self.object_fullname(updated_node.name.value)
         if object_fullname in self.blacklisted_objects:
