@@ -21,8 +21,14 @@ stubs package, docstring-adder will do the following:
          skip to the next class or function definition.
       iii. If the runtime object has a docstring, the docstring is added to the
          class/function definition in the stub file.
-   e. The modified stub file is written back to disk.
-   f. An AST safety check is performed to ensure that the modified stub file is still
+   e: For every suite in the stub file (i.e., the body of a module, class, function,
+      `if` block`, `elif` block, or `else` block), we also try to add attribute docstrings.
+      These are rarer, because they are not usually preserved at runtime, but various
+      descriptors can have docstrings that are accessible at runtime, which can be added
+      to attribute or variable declarations in a stub file. Certain special forms in the
+      typing module also benefit from this.
+   f. The modified stub file is written back to disk.
+   g. An AST safety check is performed to ensure that the modified stub file is still
       valid. It checks that the ASTs before and after docstring_adder's changes are
       identical, except for line numbers and added docstrings. If the modified stub file
       is not valid, an exception is raised. This is done after writing the modified stub
@@ -257,7 +263,15 @@ class DocstringAdder(libcst.CSTTransformer):
         # just like any indented block.
         self.suite_visitation_stack: list[set[str]] = [set()]
 
-        self.if_stack: list[list[tuple[libcst.If, bool] | None]] = []
+        # A stack of stacks.
+        #
+        # Each inner stack corresponds to an `if`/`elif`/`else` chain.
+        #
+        # Each entry in the inner stack is either:
+        # - A tuple of (`libcst.If` node, truthiness of test as `bool`), if we're
+        #   visiting an `if` or `elif` branch.
+        # - `libcst.Else`, if we're visiting an `else` branch.
+        self.if_stack: list[list[tuple[libcst.If, bool] | libcst.Else]] = []
 
     def visiting_reachable_code(self) -> bool:
         """Return `True` if we're currently visiting reachable code."""
@@ -268,13 +282,13 @@ class DocstringAdder(libcst.CSTTransformer):
             # in the current chain. In order for the branch we are currently
             # visiting to be reachable, all of these must have evaluated to `False`.
             for entry in stack[:-1]:
-                assert entry is not None
+                assert not isinstance(entry, libcst.Else)
                 _, truthiness_of_test = entry
                 if truthiness_of_test:
                     return False
 
             last_entry = stack[-1]
-            if last_entry is None:
+            if isinstance(last_entry, libcst.Else):
                 # we're visiting the `else` branch of an `if`/`elif`/`else` chain
                 continue
             else:
@@ -462,6 +476,7 @@ class DocstringAdder(libcst.CSTTransformer):
         if (
             self.if_stack
             and self.if_stack[-1][-1]
+            and not isinstance(self.if_stack[-1][-1], libcst.Else)
             and self.if_stack[-1][-1][0].orelse is node
         ):
             self.if_stack[-1].append((node, parsed_condition))
@@ -478,13 +493,23 @@ class DocstringAdder(libcst.CSTTransformer):
 
     @override
     def visit_Else(self, node: libcst.Else) -> None:
-        self.if_stack[-1].append(None)
+        """Hook called prior to visiting an `else` block in an `if`/`elif`/`else` chain.
+
+        This hook is also called prior to visiting `else` blocks of `try`/`except`/`else`
+        and `while/else` constructs, but these are rare (and probably invalid) in stub files.
+        """
+        if self.if_stack:
+            last_if = self.if_stack[-1][-1]
+            if not isinstance(last_if, libcst.Else) and node is last_if[0].orelse:
+                self.if_stack[-1].append(node)
 
     @override
     def leave_Else(
         self, original_node: libcst.Else, updated_node: libcst.Else
     ) -> libcst.Else:
-        self.if_stack[-1].pop()
+        """Hook called when the transformer leaves an `else` block."""
+        if self.if_stack and self.if_stack[-1][-1] is original_node:
+            self.if_stack[-1].pop()
         return updated_node
 
     def document_class_or_function(
