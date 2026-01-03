@@ -827,18 +827,11 @@ def add_attribute_docstrings(
             else:
                 indentation_string = None
 
+            docstring_node = libcst.SimpleString(
+                triple_quoted_docstring(docstring, indentation=indentation_string)
+            )
             new_body.append(
-                libcst.SimpleStatementLine(
-                    body=[
-                        libcst.Expr(
-                            libcst.SimpleString(
-                                triple_quoted_docstring(
-                                    docstring, indentation=indentation_string
-                                )
-                            )
-                        )
-                    ]
-                )
+                libcst.SimpleStatementLine(body=[libcst.Expr(docstring_node)])
             )
             added_docstring_to_previous = True
 
