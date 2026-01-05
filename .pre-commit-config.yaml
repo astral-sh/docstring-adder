@@ -9,7 +9,7 @@ repos:
       - id: check-merge-conflict
       - id: check-case-conflict
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.14.7
+    rev: v0.14.10
     hooks:
       - id: ruff-check
       - id: ruff-format
@@ -20,7 +20,7 @@ repos:
         language: python # means renovate will update the `additional_dependencies` for the hook
         additional_dependencies: ["tomli"]
   - repo: https://github.com/igorshubovych/markdownlint-cli
-    rev: v0.46.0
+    rev: v0.47.0
     hooks:
       - id: markdownlint-fix
       - id: markdownlint
@@ -34,7 +34,7 @@ repos:
     hooks:
       - id: validate-pyproject
   - repo: https://github.com/python-jsonschema/check-jsonschema
-    rev: 0.35.0
+    rev: 0.36.0
     hooks:
       - id: check-github-workflows
   # `actionlint` hook, for verifying correct syntax in GitHub Actions workflows.
@@ -49,7 +49,7 @@ repos:
           - "github.com/wasilibs/go-shellcheck/cmd/shellcheck@v0.11.1"
   # zizmor detects security vulnerabilities in GitHub Actions workflows.
   - repo: https://github.com/zizmorcore/zizmor-pre-commit
-    rev: v1.18.0
+    rev: v1.19.0
     hooks:
       - id: zizmor
   - repo: meta
