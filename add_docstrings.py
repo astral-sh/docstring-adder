@@ -789,7 +789,8 @@ def install_typeshed_packages(typeshed_paths: Sequence[Path]) -> None:
         version = metadata["version"].lstrip("~=")
         to_install.append(f"{path.name}=={version}")
         stubtest_requirements = (
-            metadata.get("tool", {})
+            metadata
+            .get("tool", {})
             .get("stubtest", {})
             .get("stubtest_requirements", [])
         )
