@@ -37,7 +37,7 @@ jobs:
           persist-credentials: false
       - name: Checkout typeshed
         run: git clone --depth=1 https://github.com/python/typeshed.git || git clone --depth=1 https://github.com/python/typeshed.git
-      - uses: astral-sh/setup-uv@681c641aba71e4a1c380be3ab5e12ad51f415867 # v7.1.6
+      - uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
       - name: Check a basic run doesn't fail
         run: uvx --python=${{ matrix.python-version }} --force-reinstall --from=./docstring-adder add-docstrings --stdlib-path ./typeshed/stdlib
       - name: Check typeshed's mypy_test.py passes
@@ -70,7 +70,7 @@ jobs:
           persist-credentials: false
       - name: Checkout typeshed
         run: git clone --depth=1 https://github.com/python/typeshed.git || git clone --depth=1 https://github.com/python/typeshed.git
-      - uses: astral-sh/setup-uv@681c641aba71e4a1c380be3ab5e12ad51f415867 # v7.1.6
+      - uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
       - name: Check a basic run doesn't fail
         run: uvx --python="${DEFAULT_PYTHON_VERSION}" python ./docstring-adder/.github/scripts/typeshed_third_party.py --typeshed-dir ./typeshed --docstring-adder-dir ./docstring-adder
       - name: Check typeshed's mypy_test.py passes
@@ -90,7 +90,7 @@ jobs:
           persist-credentials: false
       - name: Checkout typeshed
         run: git clone --depth=1 https://github.com/pandas-dev/pandas-stubs.git || git clone --depth=1 https://github.com/pandas-dev/pandas-stubs.git
-      - uses: astral-sh/setup-uv@681c641aba71e4a1c380be3ab5e12ad51f415867 # v7.1.6
+      - uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
       - name: Check a basic run doesn't fail
         run: uvx --python="${DEFAULT_PYTHON_VERSION}" --force-reinstall --with=pandas --from=./docstring-adder add-docstrings --packages ./pandas-stubs
       - name: Check running it again doesn't produce any changes
@@ -111,7 +111,7 @@ jobs:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@681c641aba71e4a1c380be3ab5e12ad51f415867 # v7.1.6
+      - uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
       - run: uv run mypy
 
   ty:
@@ -121,7 +121,7 @@ jobs:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@681c641aba71e4a1c380be3ab5e12ad51f415867 # v7.1.6
+      - uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
       - run: uv run ty check
 
   pre-commit:
