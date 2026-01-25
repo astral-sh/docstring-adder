@@ -92,7 +92,7 @@ jobs:
         run: git clone --depth=1 https://github.com/pandas-dev/pandas-stubs.git || git clone --depth=1 https://github.com/pandas-dev/pandas-stubs.git
       - uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
       - name: Check a basic run doesn't fail
-        run: uvx --python="${DEFAULT_PYTHON_VERSION}" --force-reinstall --with=pandas --from=./docstring-adder add-docstrings --packages ./pandas-stubs
+        run: uvx --python="${DEFAULT_PYTHON_VERSION}" --force-reinstall --with=pandas --from=./docstring-adder add-docstrings --packages ./pandas-stubs/pandas-stubs
       - name: Check running it again doesn't produce any changes
         shell: bash
         run: |
