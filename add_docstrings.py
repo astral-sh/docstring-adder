@@ -1212,17 +1212,8 @@ def _main() -> None:
         "--packages",
         nargs="+",
         help=(
-            "List of packages to add docstrings to. We will add docstrings to all stubs in"
-            " these directories. The runtime package must be installed."
-        ),
-        default=(),
-    )
-    parser.add_argument(
-        "--standalone-packages",
-        nargs="+",
-        help=(
-            "List of standalone stub package root paths to add docstrings to. We will add docstrings to "
-            "these stubs. The runtime package must be installed."
+            "List of stub package root paths to add docstrings to. We will add docstrings "
+            "to these stubs. The runtime package must be installed."
         ),
         default=(),
     )
@@ -1256,14 +1247,9 @@ def _main() -> None:
 
     typeshed_paths = [Path(p) for p in args.typeshed_packages]
     install_typeshed_packages(typeshed_paths)
-    standalone_paths = [Path(p) for p in args.standalone_packages]
     package_paths = [Path(p) for p in args.packages]
-    all_package_paths = package_paths + standalone_paths + typeshed_paths
-    search_paths = [
-        *package_paths,
-        *dict.fromkeys(p.parent for p in standalone_paths),
-        *typeshed_paths,
-    ]
+    all_package_paths = package_paths + typeshed_paths
+    search_paths = [*dict.fromkeys(p.parent for p in package_paths), *typeshed_paths]
 
     combined_blacklist = frozenset(
         chain.from_iterable(load_blacklist(Path(path)) for path in args.blacklists)
