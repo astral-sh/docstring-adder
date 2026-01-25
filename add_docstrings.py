@@ -1218,6 +1218,15 @@ def _main() -> None:
         default=(),
     )
     parser.add_argument(
+        "--standalone-packages",
+        nargs="+",
+        help=(
+            "List of standalone stub package root paths to add docstrings to. We will add docstrings to "
+            "these stubs. The runtime package must be installed."
+        ),
+        default=(),
+    )
+    parser.add_argument(
         "-t",
         "--typeshed-packages",
         nargs="+",
@@ -1247,14 +1256,21 @@ def _main() -> None:
 
     typeshed_paths = [Path(p) for p in args.typeshed_packages]
     install_typeshed_packages(typeshed_paths)
-    package_paths = [Path(p) for p in args.packages] + typeshed_paths
+    standalone_paths = [Path(p) for p in args.standalone_packages]
+    package_paths = [Path(p) for p in args.packages]
+    all_package_paths = package_paths + standalone_paths + typeshed_paths
+    search_paths = [
+        *package_paths,
+        *dict.fromkeys(p.parent for p in standalone_paths),
+        *typeshed_paths,
+    ]
 
     combined_blacklist = frozenset(
         chain.from_iterable(load_blacklist(Path(path)) for path in args.blacklists)
     )
     stdlib_blacklist = combined_blacklist | STDLIB_OBJECT_BLACKLIST
     context = typeshed_client.get_search_context(
-        typeshed=stdlib_path, search_path=package_paths, version=sys.version_info[:2]
+        typeshed=stdlib_path, search_path=search_paths, version=sys.version_info[:2]
     )
 
     codemodded_stubs = 0
@@ -1269,7 +1285,7 @@ def _main() -> None:
                 continue
             else:
                 add_docstrings_to_stub(module, path, context, stdlib_blacklist)
-        elif any(path.is_relative_to(p) for p in package_paths):
+        elif any(path.is_relative_to(p) for p in all_package_paths):
             add_docstrings_to_stub(module, path, context, combined_blacklist)
         else:
             continue
