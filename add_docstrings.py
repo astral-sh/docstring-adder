@@ -934,7 +934,11 @@ def add_docstrings_to_stub(
         return
 
     stub_source = path.read_text(encoding="utf-8")
-    parsed_module = libcst.parse_module(stub_source)
+    try:
+        parsed_module = libcst.parse_module(stub_source)
+    except libcst.ParserSyntaxError as e:
+        log(f"Could not parse '{module_name}' at {path}: {e}")
+        return
 
     if runtime_module.__doc__ and parsed_module.get_docstring() is None:
         docstring = triple_quoted_docstring(runtime_module.__doc__) + "\n"
