@@ -61,7 +61,7 @@
       matchManagers: ["pep621"],
       matchPackageNames: ["ty"],
       description: "ty",
-      schedule: ["before 4am"],
+      schedule: ["at any time"],
     },
   ],
   vulnerabilityAlerts: {
