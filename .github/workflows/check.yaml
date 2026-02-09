@@ -41,6 +41,8 @@ jobs:
       - name: Check a basic run doesn't fail
         run: uvx --python=${{ matrix.python-version }} --force-reinstall --from=./docstring-adder add-docstrings --stdlib-path ./typeshed/stdlib
       - name: Check typeshed's mypy_test.py passes
+        # mypy_test.py no longer supports being run with Python 3.9
+        if: ${{ matrix.python-version != '3.9' }}
         run: uv run --directory=typeshed --no-project --python="${DEFAULT_PYTHON_VERSION}" --with-requirements=requirements-tests.txt python tests/mypy_test.py stdlib -p "${{ matrix.python-version }}"
       - name: Check running it again doesn't produce any changes
         # Some weird thing with distutils means that it does actually add docstrings
