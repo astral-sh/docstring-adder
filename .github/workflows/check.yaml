@@ -136,7 +136,7 @@ jobs:
           version: "0.10.0"
       - run: uv run ty check
 
-  pre-commit:
+  prek:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -155,9 +155,9 @@ jobs:
       - typeshed-third-party
       - mypy
       - ty
-      - pre-commit
+      - prek
       - pandas-stubs
-    if: ${{ github.repository == 'astral-sh/docstring-adder' && always() && github.event_name == 'schedule' && ((needs.stdlib.result == 'failure') || (needs.typeshed-third-party.result == 'failure') || (needs.mypy.result == 'failure') || (needs.ty.result == 'failure') || (needs.pre-commit.result == 'failure') || (needs.pandas-stubs.result == 'failure')) }}
+    if: ${{ github.repository == 'astral-sh/docstring-adder' && always() && github.event_name == 'schedule' && ((needs.stdlib.result == 'failure') || (needs.typeshed-third-party.result == 'failure') || (needs.mypy.result == 'failure') || (needs.ty.result == 'failure') || (needs.prek.result == 'failure') || (needs.pandas-stubs.result == 'failure')) }}
     permissions:
       issues: write # to create issues through actions/github-script
     steps:
