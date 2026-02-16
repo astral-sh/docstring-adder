@@ -44,9 +44,9 @@
       schedule: ["before 4am on Monday"],
     },
     {
-      groupName: "pre-commit dependencies",
+      groupName: "prek dependencies",
       matchManagers: ["pre-commit"],
-      description: "Weekly update of pre-commit dependencies",
+      description: "Weekly update of prek dependencies",
       schedule: ["before 4am on Monday"],
     },
     {
