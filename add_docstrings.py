@@ -271,7 +271,7 @@ class DocstringAdder(libcst.CSTTransformer):
         # - A tuple of (`libcst.If` node, truthiness of test as `bool`), if we're
         #   visiting an `if` or `elif` branch.
         # - `libcst.Else`, if we're visiting an `else` branch.
-        self.if_stack: list[list[tuple[libcst.If, bool] | libcst.Else]] = []  # ty: ignore[unsupported-operator]
+        self.if_stack: list[list[tuple[libcst.If, bool] | libcst.Else]] = []
 
     def visiting_reachable_code(self) -> bool:
         """Return `True` if we're currently visiting reachable code."""
