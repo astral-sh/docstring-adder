@@ -41,7 +41,7 @@ repos:
         priority: 0
   # zizmor detects security vulnerabilities in GitHub Actions workflows.
   - repo: https://github.com/zizmorcore/zizmor-pre-commit
-    rev: v1.23.1
+    rev: v1.24.1
     hooks:
       - id: zizmor
         priority: 0
@@ -74,7 +74,7 @@ repos:
         exclude_types: ["markdown"]
         priority: 2
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.10
+    rev: v0.15.11
     hooks:
       - id: ruff-check
         priority: 2
