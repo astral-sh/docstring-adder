@@ -54,8 +54,8 @@ Some miscellaneous details:
 - The tool should not add any docstrings to unreachable branches, given the platform and
   Python version it is run on. For example, if it is being run on Windows, it should not
   add any docstrings to definitions inside `if sys.platform == "linux"` branches;
-  similarly, if it is being run on Python 3.9, it should not add any docstrings to
-  definitions inside `if sys.version_info >= (3, 10)` branches. Fundamentally, the tool
+  similarly, if it is being run on Python 3.10, it should not add any docstrings to
+  definitions inside `if sys.version_info >= (3, 11)` branches. Fundamentally, the tool
   can only accurately add docstrings to definitions that exist at runtime on the Python
   version and platform the tool is run on, since docstrings are retrieved by dynamically
   inspecting the runtime module that corresponds to the stub.
@@ -287,15 +287,15 @@ class DocstringAdder(libcst.CSTTransformer):
                 if truthiness_of_test:
                     return False
 
-            last_entry = stack[-1]
-            if isinstance(last_entry, libcst.Else):
-                # we're visiting the `else` branch of an `if`/`elif`/`else` chain
-                continue
-            else:
-                # we're visiting an `if` or `elif` branch
-                _, truthiness_of_test = last_entry
-                if not truthiness_of_test:
-                    return False
+            match stack[-1]:
+                case libcst.Else():
+                    # we're visiting the `else` branch of an `if`/`elif`/`else` chain
+                    continue
+                case (_, truthiness_of_test):  # type: ignore[misc]
+                    # we're visiting an `if` or `elif` branch
+                    if not truthiness_of_test:
+                        return False
+
         return True
 
     def maybe_mangled_name(self, name: str) -> str:
@@ -473,15 +473,11 @@ class DocstringAdder(libcst.CSTTransformer):
         )
         assert isinstance(parsed_condition, bool)
 
-        if (
-            self.if_stack
-            and self.if_stack[-1][-1]
-            and not isinstance(self.if_stack[-1][-1], libcst.Else)
-            and self.if_stack[-1][-1][0].orelse is node
-        ):
-            self.if_stack[-1].append((node, parsed_condition))
-        else:
-            self.if_stack.append([(node, parsed_condition)])
+        match self.if_stack:
+            case [*_, [*_, (last_if_node, _)]] if last_if_node.orelse is node:  # type: ignore[union-attr]
+                self.if_stack[-1].append((node, parsed_condition))
+            case _:
+                self.if_stack.append([(node, parsed_condition)])
 
     @override
     def leave_If(self, original_node: libcst.If, updated_node: libcst.If) -> libcst.If:
@@ -498,9 +494,8 @@ class DocstringAdder(libcst.CSTTransformer):
         This hook is also called prior to visiting `else` blocks of `try`/`except`/`else`
         and `while/else` constructs, but these are rare (and probably invalid) in stub files.
         """
-        if self.if_stack:
-            last_if = self.if_stack[-1][-1]
-            if not isinstance(last_if, libcst.Else) and node is last_if[0].orelse:
+        match self.if_stack:
+            case [*_, [*_, (last_if, _)]] if last_if.orelse is node:  # type: ignore[union-attr]
                 self.if_stack[-1].append(node)
 
     @override
@@ -552,27 +547,20 @@ class DocstringAdder(libcst.CSTTransformer):
         )
 
         # If the body is just a `...`, replace it with just the docstring.
-        if (
-            isinstance(updated_node.body, libcst.SimpleStatementSuite)
-            and len(updated_node.body.body) == 1
-            and isinstance(updated_node.body.body[0], libcst.Expr)
-            and isinstance(updated_node.body.body[0].value, libcst.Ellipsis)
-        ):
-            new_body = libcst.IndentedBlock(
-                body=[libcst.SimpleStatementLine(body=[docstring_node])],
-                # but preserve `type: ignore` comments
-                header=updated_node.body.trailing_whitespace,
-            )
-        elif isinstance(updated_node.body, libcst.IndentedBlock):
-            if (
-                len(updated_node.body.body) == 1
-                and isinstance(updated_node.body.body[0], libcst.Expr)
-                and isinstance(updated_node.body.body[0].value, libcst.Ellipsis)
+        match updated_node.body:
+            case libcst.SimpleStatementSuite(
+                body=[libcst.Expr(value=libcst.Ellipsis())]
             ):
+                new_body = libcst.IndentedBlock(
+                    body=[libcst.SimpleStatementLine(body=[docstring_node])],
+                    # but preserve `type: ignore` comments
+                    header=updated_node.body.trailing_whitespace,
+                )
+            case libcst.IndentedBlock(body=[libcst.Expr(value=libcst.Ellipsis())]):
                 new_body = updated_node.body.with_changes(
                     body=[libcst.SimpleStatementLine(body=[docstring_node])]
                 )
-            else:
+            case libcst.IndentedBlock():
                 new_body = updated_node.body.with_changes(
                     body=list(
                         chain(
@@ -581,8 +569,8 @@ class DocstringAdder(libcst.CSTTransformer):
                         )
                     )
                 )
-        else:
-            return updated_node
+            case _:
+                return updated_node
 
         return updated_node.with_changes(body=new_body)
 
@@ -657,11 +645,13 @@ def final_statement_of_if(
     node: libcst.If,
 ) -> libcst.BaseStatement | libcst.BaseSmallStatement:
     """Retrieve the final statement of an `if`/`elif`/`else` chain."""
-    if node.orelse is None:
-        return node.body.body[-1]
-    if isinstance(node.orelse, libcst.Else):
-        return node.orelse.body.body[-1]
-    return final_statement_of_if(node.orelse)
+    match node.orelse:
+        case None:
+            return node.body.body[-1]
+        case libcst.Else():
+            return node.orelse.body.body[-1]
+        case _:
+            return final_statement_of_if(node.orelse)
 
 
 def add_attribute_docstrings(
@@ -700,15 +690,12 @@ def add_attribute_docstrings(
         added_docstring_to_previous = False
 
         if isinstance(statement, libcst.If):
-            final_line = final_statement_of_if(statement)
-            if (
-                isinstance(final_line, libcst.SimpleStatementLine)
-                and len(final_line.body) == 1
-                and isinstance(final_line.body[0], libcst.Expr)
-                and isinstance(final_line.body[0].value, libcst.SimpleString)
-            ):
-                added_docstring_to_previous = True
-                continue
+            match final_statement_of_if(statement):
+                case libcst.SimpleStatementLine(
+                    body=[libcst.Expr(value=libcst.SimpleString())]
+                ):
+                    added_docstring_to_previous = True
+                    continue
 
         # If it's an annotated assignment that we could potentially add a docstring to...
         if (
@@ -723,12 +710,13 @@ def add_attribute_docstrings(
             )
         ):
             assignment = statement.body[0]
-            if isinstance(assignment, libcst.AnnAssign):
-                target = assignment.target
-            elif isinstance(assignment, libcst.Assign) and len(assignment.targets) == 1:
-                target = assignment.targets[0].target
-            else:
-                continue
+            match assignment:
+                case libcst.AnnAssign():
+                    target = assignment.target
+                case libcst.Assign(targets=[single_target]):
+                    target = single_target.target
+                case _:
+                    continue
 
             if not isinstance(target, libcst.Name):
                 continue
@@ -881,16 +869,7 @@ def get_runtime_object_for_stub(
         runtime = inspect.unwrap(
             inspect.getattr_static(runtime_parent.value.inner, name)
         )
-        # `inspect.unwrap()` doesn't do a great job for staticmethod/classmethod on Python 3.9,
-        # because the `__wrapped__` attribute was added for these objects in Python 3.10.
-        # Instead, retrieve the underlying (hopefully documented) function by accessing
-        # the `__func__` attribute.
-        if (
-            sys.version_info < (3, 10)
-            and not isinstance(runtime, type)
-            and hasattr(runtime, "__func__")
-        ):
-            runtime = runtime.__func__
+
     # Some getattr() and `hasattr()` calls raise TypeError,
     # or something even more exotic,
     # but we don't want the tool to crash in these cases.
@@ -992,17 +971,12 @@ def assert_asts_match(old: ast.AST, new: ast.AST) -> None:
         if field_name in {"body", "orelse"}:
             # Allow replacing a body that only has `...` in it with
             # a body that only has a docstring in it
-            if (
-                len(old_field) == 1
-                and isinstance(old_field[0], ast.Expr)
-                and isinstance(old_field[0].value, ast.Constant)
-                and old_field[0].value.value is ...
-                and len(new_field) == 1
-                and isinstance(new_field[0], ast.Expr)
-                and isinstance(new_field[0].value, ast.Constant)
-                and isinstance(new_field[0].value.value, str)
-            ):
-                continue
+            match (old_field, new_field):
+                case (
+                    [ast.Expr(value=ast.Constant(value=types.EllipsisType()))],
+                    [ast.Expr(value=ast.Constant(value=str()))],
+                ):
+                    continue
 
             old_field_iter = iter(old_field)
             new_field_iter = iter(new_field)
@@ -1011,40 +985,30 @@ def assert_asts_match(old: ast.AST, new: ast.AST) -> None:
             next_new = next(new_field_iter, None)
 
             while next_old is not None:
-                if next_new is None:
-                    raise _make_safety_error(
-                        old,
-                        new,
-                        type(old).__name__,
-                        type(new).__name__,
-                        "Nodes appear to have been removed from the body of a function/class/module/if-else",
-                    )
-
-                # if there was already a docstring, we expect it to have been preserved
-                if (
-                    isinstance(next_old, ast.Expr)
-                    and isinstance(next_old.value, ast.Constant)
-                    and isinstance(next_old.value.value, str)
-                ):
-                    new_field.append(next_new)
-                    next_old = next(old_field_iter, None)
-                    next_new = next(new_field_iter, None)
-
-                # Allow new docstrings to have been added
-                # if there wasn't there one before
-                elif (
-                    isinstance(next_new, ast.Expr)
-                    and isinstance(next_new.value, ast.Constant)
-                    and isinstance(next_new.value.value, str)
-                ):
-                    next_new = next(new_field_iter, None)
-
-                # if there wasn't a docstring previously and there isn't one being added,
-                # we expect the nodes to match
-                else:
-                    new_field.append(next_new)
-                    next_old = next(old_field_iter, None)
-                    next_new = next(new_field_iter, None)
+                match (next_old, next_new):
+                    case (_, None):
+                        raise _make_safety_error(
+                            old,
+                            new,
+                            type(old).__name__,
+                            type(new).__name__,
+                            "Nodes appear to have been removed from the body of a function/class/module/if-else",
+                        )
+                    case (ast.Expr(value=ast.Constant(value=str())), _):
+                        # if there was already a docstring, we expect it to have been preserved
+                        new_field.append(next_new)
+                        next_old = next(old_field_iter, None)
+                        next_new = next(new_field_iter, None)
+                    case (_, ast.Expr(value=ast.Constant(value=str()))):
+                        # Allow new docstrings to have been added
+                        # if there wasn't there one before
+                        next_new = next(new_field_iter, None)
+                    case _:
+                        # if there wasn't a docstring previously and there isn't one being added,
+                        # we expect the nodes to match
+                        new_field.append(next_new)
+                        next_old = next(old_field_iter, None)
+                        next_new = next(new_field_iter, None)
 
         _assert_ast_fields_match(old, new, old_field, new_field)
 
@@ -1075,7 +1039,7 @@ def _assert_ast_fields_match(
                 len(new_value),
                 "AST node lists differ in length",
             )
-        for old_item, new_item in zip(old_value, new_value):
+        for old_item, new_item in zip(old_value, new_value, strict=True):
             _assert_ast_fields_match(old_container, new_container, old_item, new_item)
     elif isinstance(old_value, _SCALAR_TYPES) and isinstance(new_value, _SCALAR_TYPES):
         if type(old_value) is not type(new_value):

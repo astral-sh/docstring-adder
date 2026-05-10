@@ -28,7 +28,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
         platform: ["ubuntu-latest", "macos-latest", "windows-latest"]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -43,15 +43,13 @@ jobs:
       - name: Check a basic run doesn't fail
         run: uvx --python=${{ matrix.python-version }} --force-reinstall --from=./docstring-adder add-docstrings --stdlib-path ./typeshed/stdlib
       - name: Check typeshed's mypy_test.py passes
-        # mypy_test.py no longer supports being run with Python 3.9
-        if: ${{ matrix.python-version != '3.9' }}
         run: uv run --directory=typeshed --no-project --python="${DEFAULT_PYTHON_VERSION}" --with-requirements=requirements-tests.txt python tests/mypy_test.py stdlib -p "${{ matrix.python-version }}"
       - name: Check running it again doesn't produce any changes
         # Some weird thing with distutils means that it does actually add docstrings
         # when run the second time that it didn't add when run the first time.
         # I have no appetite to figure out what cursed thing in distutils is causing this,
         # and it doesn't seem to be a major issue in general.
-        if: ${{ (matrix.python-version != '3.9') && (matrix.python-version != '3.10') && (matrix.python-version != '3.11') }}
+        if: ${{ (matrix.python-version != '3.10') && (matrix.python-version != '3.11') }}
         shell: bash
         run: |
           cd typeshed
