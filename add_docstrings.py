@@ -1075,7 +1075,7 @@ def _assert_ast_fields_match(
                 len(new_value),
                 "AST node lists differ in length",
             )
-        for old_item, new_item in zip(old_value, new_value):
+        for old_item, new_item in zip(old_value, new_value, strict=True):
             _assert_ast_fields_match(old_container, new_container, old_item, new_item)
     elif isinstance(old_value, _SCALAR_TYPES) and isinstance(new_value, _SCALAR_TYPES):
         if type(old_value) is not type(new_value):
