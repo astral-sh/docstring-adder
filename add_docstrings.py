@@ -291,7 +291,7 @@ class DocstringAdder(libcst.CSTTransformer):
                 case libcst.Else():
                     # we're visiting the `else` branch of an `if`/`elif`/`else` chain
                     continue
-                case (_, truthiness_of_test):  # type: ignore[misc]
+                case (_, truthiness_of_test):
                     # we're visiting an `if` or `elif` branch
                     if not truthiness_of_test:
                         return False
@@ -474,7 +474,7 @@ class DocstringAdder(libcst.CSTTransformer):
         assert isinstance(parsed_condition, bool)
 
         match self.if_stack:
-            case [*_, [*_, (last_if_node, _)]] if last_if_node.orelse is node:  # type: ignore[union-attr]
+            case [*_, [*_, (last_if_node, _)]] if last_if_node.orelse is node:
                 self.if_stack[-1].append((node, parsed_condition))
             case _:
                 self.if_stack.append([(node, parsed_condition)])
@@ -495,7 +495,7 @@ class DocstringAdder(libcst.CSTTransformer):
         and `while/else` constructs, but these are rare (and probably invalid) in stub files.
         """
         match self.if_stack:
-            case [*_, [*_, (last_if, _)]] if last_if.orelse is node:  # type: ignore[union-attr]
+            case [*_, [*_, (last_if, _)]] if last_if.orelse is node:
                 self.if_stack[-1].append(node)
 
     @override
@@ -883,7 +883,7 @@ def get_runtime_object_for_stub(
     # ... with one exception to the exceptions: `typing.Callable`
     if (
         isinstance(runtime, type(typing.Mapping))
-        and runtime is not typing.Callable  # type: ignore[comparison-overlap]
+        and runtime is not typing.Callable  # type: ignore[comparison-overlap, redundant-expr]
         and runtime.__origin__.__module__ == "collections.abc"  # type: ignore[attr-defined]
     ):
         runtime = runtime.__origin__  # type: ignore[attr-defined]
