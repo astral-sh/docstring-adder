@@ -823,7 +823,8 @@ def test_attribute_docstring_at_end_of_version_guard_is_followed_by_blank_line(
     """A documented version-guard branch remains separated from following APIs."""
     source = textwrap.dedent(version_guard)
     expected = textwrap.dedent(expected)
-    transformed = blacken(transform(source, runtime_module()))
+    with patch.object(sys, "version_info", (3, 14)):
+        transformed = blacken(transform(source, runtime_module()))
     assert transformed == expected
 
 
