@@ -55,7 +55,7 @@ jobs:
           git -C typeshed checkout HEAD~1 -- stdlib
           git -C typeshed restore --staged stdlib
           uvx --python=3.15 --from=./new_codemod add-docstrings --stdlib-path ./typeshed/stdlib
-          uvx --python=3.14 --from=./old_codemod add-docstrings --stdlib-path ./typeshed/stdlib
+          uvx --python=3.14 --from=./new_codemod add-docstrings --stdlib-path ./typeshed/stdlib
           uvx --python=3.10 --from=./new_codemod add-docstrings --stdlib-path ./typeshed/stdlib
           uvx --directory=typeshed black stdlib || true
       - name: Get the diff between the two docstring-adder runs
