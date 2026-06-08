@@ -1,6 +1,6 @@
 """Tool to add docstrings to stubs.
 
-The tool is a libcst-based codemod. Given a path to a typeshed `stdlib` directory or a
+The tool is an AST-based codemod. Given a path to a typeshed `stdlib` directory or a
 stubs package, docstring-adder will do the following:
 
 1. Determine a set of all stub files in the directory (using the `typeshed_client`
@@ -40,10 +40,10 @@ Some miscellaneous details:
   never remove or alter docstrings that were already present in the stub file.
   Idempotency cannot be guaranteed, however, if importing the package at runtime causes
   persistent changes to be made to your Python environment.
-- Because it is a libcst-based codemod, it should not make spurious changes to formatting
-  or comments in the stub file. `type: ignore` comments should be preserved; mypy and
-  other type checkers should still be able to type-check the stub file after
-  docstring-adder has run.
+- Because it applies targeted edits to the original source, it should not make
+  spurious changes to formatting or comments in the stub file. `type: ignore` comments
+  should be preserved; mypy and other type checkers should still be able to type-check
+  the stub file after docstring-adder has run.
 - Nested namespaces are supported: docstring-adder is capable of adding a docstring to a
   function definition inside a class (a method definition), a class definition inside a
   class, or even a function definition inside a class definition inside a class definition.
@@ -94,28 +94,29 @@ from __future__ import annotations
 
 import argparse
 import ast
+import bisect
 import contextlib
 import importlib
 import inspect
 import io
-import itertools
 import subprocess
 import sys
 import textwrap
+import token
+import tokenize
 import types
 import typing
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
-from typing import TypeVar
+from typing import Any, ClassVar, NewType, TypeAlias, TypeGuard, final
 
-import libcst
 import tomli
 import typeshed_client
 from rich_argparse import RawDescriptionRichHelpFormatter
 from termcolor import colored
-from typing_extensions import override
 
 
 def log(*objects: object) -> None:
@@ -123,8 +124,193 @@ def log(*objects: object) -> None:
     print(colored(" ".join(map(str, objects)), "yellow"))
 
 
-# Type variable representing a node that could have a docstring added to it.
-DocumentableT = TypeVar("DocumentableT", libcst.ClassDef, libcst.FunctionDef)
+# Type alias representing a node that could have a docstring added to it.
+Documentable: TypeAlias = ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef
+# NewTypes representing distinct integer domains used for source locations.
+TokenKind = NewType("TokenKind", int)
+LineNumber = NewType("LineNumber", int)
+CharacterColumn = NewType("CharacterColumn", int)
+ByteColumn = NewType("ByteColumn", int)
+TokenListIndex = NewType("TokenListIndex", int)
+TextOffset = NewType("TextOffset", int)
+
+
+@dataclass(slots=True)
+class TokenPosition:
+    """A tokenizer line and character-column pair."""
+
+    line_number: LineNumber
+    character_column: CharacterColumn
+
+    def __init__(self, line_number: int, column: int) -> None:
+        self.line_number = LineNumber(line_number)
+        self.character_column = CharacterColumn(column)
+
+
+@dataclass(frozen=True, slots=True)
+class Token:
+    """A token with absolute character offsets into the original source."""
+
+    kind: TokenKind
+    string: str
+    start: TokenPosition
+    index: TokenListIndex
+    startpos: TextOffset
+    endpos: TextOffset
+
+
+class TokenIndex:
+    """Map AST source coordinates to stdlib tokens in the original source."""
+
+    _NON_CODING_TOKENS: ClassVar[set[TokenKind]] = {
+        TokenKind(token.INDENT),
+        TokenKind(token.DEDENT),
+        TokenKind(token.NEWLINE),
+        TokenKind(token.ENDMARKER),
+        TokenKind(token.COMMENT),
+        TokenKind(tokenize.NL),
+    }
+
+    def __init__(self, source: str) -> None:
+        self.source = source
+        self.lines = source.split("\n")
+        self.line_starts = [TextOffset(0)]
+        self.line_starts.extend(
+            TextOffset(index + 1)
+            for index, character in enumerate(source)
+            if character == "\n"
+        )
+
+        token_infos = list(tokenize.generate_tokens(io.StringIO(source).readline))
+        self.tokens: list[Token] = []
+        for index, token_info in enumerate(token_infos):
+            start = TokenPosition(*token_info.start)
+            end = TokenPosition(*token_info.end)
+            self.tokens.append(
+                Token(
+                    kind=TokenKind(token_info.type),
+                    string=token_info.string,
+                    start=start,
+                    index=TokenListIndex(index),
+                    startpos=self.source_offset(start),
+                    endpos=self.source_offset(end),
+                )
+            )
+        self.token_starts = [source_token.startpos for source_token in self.tokens]
+
+    def source_offset(self, position: TokenPosition) -> TextOffset:
+        """Convert a tokenizer row and character column to a source offset."""
+        if position.line_number > len(self.line_starts):
+            return TextOffset(len(self.source))
+        return TextOffset(
+            self.line_starts[position.line_number - 1] + position.character_column
+        )
+
+    def ast_offset(self, line: LineNumber, byte_column: ByteColumn) -> TextOffset:
+        """Convert an AST row and UTF-8 byte column to a source offset."""
+        source_line = self.lines[line - 1]
+        character_column = len(
+            source_line.encode("utf-8")[:byte_column].decode("utf-8")
+        )
+        return TextOffset(self.line_starts[line - 1] + character_column)
+
+    def first_token(self, node: ast.stmt) -> Token:
+        """Return the first coding token belonging to a statement."""
+        start = self.ast_offset(LineNumber(node.lineno), ByteColumn(node.col_offset))
+        first_index = bisect.bisect_left(self.token_starts, start)
+
+        if (
+            isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.decorator_list
+        ):
+            first_decorator = node.decorator_list[0]
+            decorator_start = self.ast_offset(
+                LineNumber(first_decorator.lineno),
+                ByteColumn(first_decorator.col_offset),
+            )
+            first_index = bisect.bisect_left(self.token_starts, decorator_start)
+            if first_index > 0 and self.tokens[first_index - 1].string == "@":
+                first_index -= 1
+
+        while self.tokens[first_index].kind in self._NON_CODING_TOKENS:
+            first_index += 1
+        return self.tokens[first_index]
+
+    def last_token(self, node: ast.stmt) -> Token:
+        """Return the last coding token belonging to a statement."""
+        end_line = node.end_lineno
+        end_column = node.end_col_offset
+        if end_line is None or end_column is None:
+            raise RuntimeError("AST statement is missing end position information")
+
+        end = self.ast_offset(LineNumber(end_line), ByteColumn(end_column))
+        last_index = bisect.bisect_right(self.token_starts, end) - 1
+        while (
+            self.tokens[last_index].endpos > end
+            or self.tokens[last_index].kind in self._NON_CODING_TOKENS
+        ):
+            last_index -= 1
+        return self.tokens[last_index]
+
+
+def _is_statement_list(value: list[Any]) -> TypeGuard[list[ast.stmt]]:
+    return all(isinstance(item, ast.stmt) for item in value)
+
+
+def _is_string_statement(node: ast.stmt) -> bool:
+    match node:
+        case ast.Expr(value=ast.Constant(value=str())):
+            return True
+        case _:
+            return False
+
+
+def _real_elif_of_if(node: ast.If, token_index: TokenIndex) -> ast.If | None:
+    """If the AST's nested `If` was written as an `elif` clause, return that nested `If`.
+
+    Returns `None` if this `If` does not have an `elif` clause.
+
+    The stdlib AST represents `elif condition:` and `else: if condition:` in the
+    same structural shape, so the source token is required to distinguish them.
+    """
+    match node.orelse:
+        case [ast.If() as elif_node]:
+            if token_index.first_token(elif_node).string == "elif":
+                return elif_node
+    return None
+
+
+def _final_statement_of_if(node: ast.If) -> ast.stmt:
+    """Retrieve the final statement of an `if`/`elif`/`else` chain."""
+    match node.orelse:
+        case []:
+            return node.body[-1]
+        case [ast.If() as nested_if]:
+            return _final_statement_of_if(nested_if)
+        case _:
+            return node.orelse[-1]
+
+
+def _child_suites(node: ast.AST) -> list[list[ast.stmt]]:
+    """Return direct child suites contained in a non-namespace AST node.
+
+    Some suites are nested inside helper nodes such as `ExceptHandler` and
+    `match_case`, so this descends through non-expression, non-statement container
+    nodes without recursively visiting the statements themselves.
+    """
+    suites: list[list[ast.stmt]] = []
+    for _field_name, value in ast.iter_fields(node):
+        if not isinstance(value, list) or not value:
+            continue
+        if _is_statement_list(value):
+            suites.append(value)
+        else:
+            for item in value:
+                if isinstance(item, ast.AST) and not isinstance(
+                    item, (ast.expr, ast.stmt)
+                ):
+                    suites.extend(_child_suites(item))
+    return suites
 
 
 def triple_quoted_docstring(content: str, indentation: str | None = None) -> str:
@@ -228,75 +414,160 @@ class RuntimeParent:
     value: RuntimeValue
 
 
-class DocstringAdder(libcst.CSTTransformer):
+@final
+@dataclass(frozen=True, kw_only=True, slots=True)
+class Insert:
+    """Text to insert at a character offset in the original source."""
+
+    offset: TextOffset
+    text: str
+
+
+@final
+@dataclass(frozen=True, kw_only=True, slots=True)
+class Replace:
+    """A replacement of a half-open character range in the original source."""
+
+    start: TextOffset
+    end: TextOffset
+    text: str
+
+
+SourceEdit: TypeAlias = Insert | Replace
+
+
+def _edit_range(edit: SourceEdit) -> tuple[TextOffset, TextOffset]:
+    if isinstance(edit, Insert):
+        return edit.offset, edit.offset
+    return edit.start, edit.end
+
+
+class SourceEditor:
+    """Collect non-overlapping edits and apply them without reformatting the source."""
+
+    def __init__(self, source: str) -> None:
+        self.source = source
+        self.edits: list[SourceEdit] = []
+
+    def replace(self, start: TextOffset, end: TextOffset, replacement: str) -> None:
+        """Replace the half-open source range from start to end."""
+        self.edits.append(Replace(start=start, end=end, text=replacement))
+
+    def insert(self, offset: TextOffset, text: str) -> None:
+        """Insert text, preserving call order at a shared text offset."""
+        self.edits.append(Insert(offset=offset, text=text))
+
+    def render(self) -> str:
+        """Apply planned edits from the end of the file backwards."""
+        edits = sorted(self.edits, key=_edit_range)
+
+        source_position = TextOffset(0)
+        previous_edit: SourceEdit | None = None
+        for edit in edits:
+            start, end = _edit_range(edit)
+            if start < source_position:
+                raise RuntimeError(
+                    "docstring-adder planned conflicting source edits; "
+                    f"{previous_edit!r} overlaps {edit!r}. "
+                    "This indicates a bug in the source editor."
+                )
+            source_position = end
+            previous_edit = edit
+
+        rendered = self.source
+        for edit in reversed(edits):
+            if isinstance(edit, Insert):
+                rendered = rendered[: edit.offset] + edit.text + rendered[edit.offset :]
+            else:
+                rendered = rendered[: edit.start] + edit.text + rendered[edit.end :]
+        return rendered
+
+
+class DocstringAdder:
     """Visitor to add docstrings to a stub file.
 
-    The visitor is a `libcst.CSTTransformer` that recursively attempts to adds
-    docstrings to all reachable class/function definitions inside a given stub file.
+    The visitor recursively attempts to add docstrings to all reachable class and
+    function definitions inside a parsed stub file. The stdlib AST provides the
+    structure used for traversal, while stdlib tokenization locates the exact source
+    boundaries needed to preserve the file's existing formatting and comments.
+
+    Edits are collected during traversal and applied afterwards. Applying an edit
+    immediately would invalidate the token offsets used to plan subsequent edits.
     """
 
     def __init__(
         self,
         *,
+        source: str,
+        parsed_module: ast.Module,
         module_name: str,
         runtime_module: types.ModuleType,
         stub_file_path: Path,
         typeshed_client_context: typeshed_client.SearchContext,
         blacklisted_objects: frozenset[str],
     ) -> None:
+        # All edit offsets are character positions in the original source.
+        self.source = source
+        self.token_index = TokenIndex(source)
+        self.parsed_module = parsed_module
+
+        # Source edits are accumulated here and applied after the traversal finishes.
+        self.editor = SourceEditor(source)
+
+        # A stack containing the runtime namespaces corresponding to the AST namespace
+        # currently being visited. Class definitions push an entry; function
+        # definitions deliberately do not, matching their runtime lookup semantics.
         self.runtime_parents: list[RuntimeParent] = [
             RuntimeParent(name=module_name, value=RuntimeValue(inner=runtime_module))
         ]
-        self.stub_file_path: Path = stub_file_path
-        self.typeshed_client_context: typeshed_client.SearchContext = (
-            typeshed_client_context
-        )
-        self.blacklisted_objects: frozenset[str] = blacklisted_objects
+        self.stub_file_path = stub_file_path
+        self.typeshed_client_context = typeshed_client_context
+        self.blacklisted_objects = blacklisted_objects
 
-        # A stack of sets. Each set corresponds to an `IndentedBlock` libcst node.
-        # For each nested `IndentedBlock`, we keep track of the names of functions
-        # that we've already visited (and, possibly, added docstrings to).
+        # A stack of sets. Each set corresponds to a physical indented suite in the
+        # source. For each nested suite, we keep track of names of functions that we
+        # have already visited (and, possibly, added docstrings to).
         #
-        # We start off with a single empty set, which corresponds to the module-level
-        # namespace. The module-level namespace is not represented by an `IndentedBlock`
-        # in libcst's CST, but for our purposes we treat the module-level namespace
-        # just like any indented block.
+        # We start with a single empty set corresponding to the module-level namespace.
+        # The module body is not an indented suite, but for our purposes it is treated
+        # in the same way.
         self.suite_visitation_stack: list[set[str]] = [set()]
 
-        # A stack of stacks.
-        #
-        # Each inner stack corresponds to an `if`/`elif`/`else` chain.
-        #
-        # Each entry in the inner stack is either:
-        # - A tuple of (`libcst.If` node, truthiness of test as `bool`), if we're
-        #   visiting an `if` or `elif` branch.
-        # - `libcst.Else`, if we're visiting an `else` branch.
-        self.if_stack: list[list[tuple[libcst.If, bool] | libcst.Else]] = []
+        # The current physical indentation depth. This is used to reproduce the
+        # existing four-spaces-per-level formatting of multiline attribute docstrings.
+        self.block_depth = 0
 
-    def visiting_reachable_code(self) -> bool:
-        """Return `True` if we're currently visiting reachable code."""
-        if not self.if_stack:
-            return True
-        for stack in self.if_stack:
-            # these are the entries for already-visited `if`/`elif` statements
-            # in the current chain. In order for the branch we are currently
-            # visiting to be reachable, all of these must have evaluated to `False`.
-            for entry in stack[:-1]:
-                assert not isinstance(entry, libcst.Else)
-                _, truthiness_of_test = entry
-                if truthiness_of_test:
-                    return False
+        # Planned source edits are not visible in the AST. Keep track of assignments
+        # receiving attribute docstrings so enclosing `if` statements can still apply
+        # the correct blank-line rule.
+        self.attribute_documented: set[ast.stmt] = set()
 
-            match stack[-1]:
-                case libcst.Else():
-                    # we're visiting the `else` branch of an `if`/`elif`/`else` chain
-                    continue
-                case (_, truthiness_of_test):
-                    # we're visiting an `if` or `elif` branch
-                    if not truthiness_of_test:
-                        return False
+        # When an inline suite such as `def f(): ...` is expanded, use the first
+        # indentation token in the file, falling back to four spaces for flat files.
+        self.default_indent = next(
+            (
+                source_token.string
+                for source_token in self.token_index.tokens
+                if source_token.kind == TokenKind(token.INDENT)
+            ),
+            "    ",
+        )
 
-        return True
+        # A NEWLINE token has an empty string at the end of the file. This fallback is
+        # used when a separator is needed to insert a new statement while preserving
+        # whether the original file ended with a newline.
+        self.default_newline = "\r\n" if "\r\n" in source else "\n"
+
+    def transform(self) -> str:
+        """Plan all docstring edits and return the transformed source."""
+        for statement in self.parsed_module.body:
+            self.visit_statement(statement, reachable=True)
+        self._plan_attribute_docstrings(
+            self.parsed_module.body,
+            runtime_parent=self.runtime_parents[-1],
+            indentation=0,
+        )
+        return self.editor.render()
 
     def maybe_mangled_name(self, name: str) -> str:
         """Apply name mangling to `name`, if it is necessary.
@@ -331,44 +602,6 @@ class DocstringAdder(libcst.CSTTransformer):
 
         return name
 
-    @override
-    def visit_ClassDef(self, node: libcst.ClassDef) -> None:
-        """Visit a class definition node in the stub file.
-
-        This hook is called before any sub-statements and sub-expressions inside the
-        class definition are visited or transformed. This allows us to retrieve the
-        runtime object representing the class, and append it to the stack of runtime
-        parents.
-        """
-        runtime_object = get_runtime_object_for_stub(
-            name=self.maybe_mangled_name(node.name.value),
-            runtime_parent=self.runtime_parents[-1],
-        )
-        if runtime_object is None:
-            self._log_runtime_object_not_found(node.name.value)
-            runtime_object = RuntimeValue(NOT_FOUND)
-        self.runtime_parents.append(
-            RuntimeParent(name=node.name.value, value=runtime_object)
-        )
-
-    @override
-    def leave_ClassDef(
-        self, original_node: libcst.ClassDef, updated_node: libcst.ClassDef
-    ) -> libcst.ClassDef:
-        """Attempt to add a docstring to the class definition.
-
-        This hook is called after all sub-statements and sub-expressions inside the
-        class definition have been visited and transformed.
-        """
-
-        runtime_class = self.runtime_parents.pop().value
-        if runtime_class.is_not_found():
-            return original_node
-        else:
-            return self.document_class_or_function(
-                updated_node=updated_node, runtime_object=runtime_class
-            )
-
     def object_fullname(self, final_part: str) -> str:
         """Given an unqualified name, convert it to a fully qualified name.
 
@@ -383,147 +616,154 @@ class DocstringAdder(libcst.CSTTransformer):
         mangled_name = self.maybe_mangled_name(final_part)
         return f"{parent_fullname}.{mangled_name}"
 
-    def _log_runtime_object_not_found(self, name: str) -> None:
-        if self.visiting_reachable_code():
+    def _log_runtime_object_not_found(self, name: str, *, reachable: bool) -> None:
+        if reachable:
             log(f"Could not find {self.object_fullname(name)} at runtime")
 
-    @override
-    def leave_FunctionDef(
-        self, original_node: libcst.FunctionDef, updated_node: libcst.FunctionDef
-    ) -> libcst.FunctionDef:
-        """Attempt to add a docstring to the function definition."""
+    def visit_statement(self, node: ast.stmt, *, reachable: bool) -> None:
+        """Visit a statement and recursively visit any suites it contains."""
+        match node:
+            case ast.ClassDef():
+                self.visit_class(node, reachable=reachable)
+            case ast.FunctionDef() | ast.AsyncFunctionDef():
+                self.visit_function(node, reachable=reachable)
+            case ast.If():
+                self.visit_if(node, reachable=reachable)
+            case _:
+                for child_suite in _child_suites(node):
+                    self.visit_suite(child_suite, reachable=reachable)
+
+    def visit_class(self, node: ast.ClassDef, *, reachable: bool) -> None:
+        """Visit a class definition and attempt to add its runtime docstring.
+
+        The runtime object representing the class is retrieved before the class body is
+        visited and appended to the stack of runtime parents. This allows nested classes,
+        methods, and attributes to be resolved relative to the runtime class. The class
+        docstring itself is planned after all statements in the class body have been
+        visited.
+        """
+        runtime_parent = self.runtime_parents[-1]
+        runtime_object: RuntimeValue | None
+        if runtime_parent.value.is_not_found():
+            runtime_object = RuntimeValue(NOT_FOUND)
+        else:
+            runtime_object = get_runtime_object_for_stub(
+                name=self.maybe_mangled_name(node.name), runtime_parent=runtime_parent
+            )
+            if runtime_object is None:
+                self._log_runtime_object_not_found(node.name, reachable=reachable)
+                runtime_object = RuntimeValue(NOT_FOUND)
+        self.runtime_parents.append(RuntimeParent(node.name, runtime_object))
+
+        self.visit_suite(node.body, reachable=reachable)
+
+        runtime_class = self.runtime_parents.pop().value
+        if not runtime_class.is_not_found():
+            self._document_class_or_function(
+                node, runtime_object=runtime_class, reachable=reachable
+            )
+
+    def visit_function(
+        self, node: ast.FunctionDef | ast.AsyncFunctionDef, *, reachable: bool
+    ) -> None:
+        """Visit a function definition and attempt to add its runtime docstring."""
+        self.visit_suite(node.body, reachable=reachable)
 
         # If there are multiple functions with the same name in an indented block,
         # it's probably an overloaded function or the `@setter` for a property.
         # Only add a docstring for the first definition.
-        if original_node.name.value in self.suite_visitation_stack[-1]:
-            return original_node
-        self.suite_visitation_stack[-1].add(original_node.name.value)
+        if node.name in self.suite_visitation_stack[-1]:
+            return
+        self.suite_visitation_stack[-1].add(node.name)
 
         runtime_parent = self.runtime_parents[-1]
 
         if runtime_parent.value.is_not_found():
-            return original_node
+            return
 
         runtime_object = get_runtime_object_for_stub(
-            name=self.maybe_mangled_name(updated_node.name.value),
-            runtime_parent=runtime_parent,
+            name=self.maybe_mangled_name(node.name), runtime_parent=runtime_parent
         )
 
         if runtime_object is None:
-            self._log_runtime_object_not_found(updated_node.name.value)
-            return original_node
+            self._log_runtime_object_not_found(node.name, reachable=reachable)
+            return
 
-        return self.document_class_or_function(
-            updated_node=updated_node, runtime_object=runtime_object
+        self._document_class_or_function(
+            node, runtime_object=runtime_object, reachable=reachable
         )
 
-    @override
-    def visit_IndentedBlock(self, node: libcst.IndentedBlock) -> None:
-        """Hook called before visiting an `IndentedBlock` node."""
-        self.suite_visitation_stack.append(set())
+    def visit_if(self, node: ast.If, *, reachable: bool) -> None:
+        """Visit an `if` statement and only document its reachable branch.
 
-    @override
-    def leave_IndentedBlock(
-        self, original_node: libcst.IndentedBlock, updated_node: libcst.IndentedBlock
-    ) -> libcst.IndentedBlock:
-        """Hook called after an `IndentedBlock` node has been visited and, possibly, modified."""
-        self.suite_visitation_stack.pop()
-
-        if not self.visiting_reachable_code():
-            return updated_node
-
-        # Don't add attribute docstrings to fields in `NamedTuple` classes.
-        # The generated docstrings for the properties in these classes
-        # are always things like "Alias for field number 0", which clutter
-        # the stubs and aren't useful.
-        runtime_parent = self.runtime_parents[-1].value.inner
-        if (
-            isinstance(runtime_parent, type)
-            and issubclass(runtime_parent, tuple)
-            and hasattr(runtime_parent, "_fields")
-        ):
-            return updated_node
-
-        return updated_node.with_changes(
-            body=add_attribute_docstrings(
-                updated_node.body,
-                runtime_parent=self.runtime_parents[-1],
-                blacklisted_objects=self.blacklisted_objects,
-                indentation=len(self.suite_visitation_stack),
-            )
-        )
-
-    @override
-    def visit_If(self, node: libcst.If) -> None:
-        """Hook called when the transformer visits an `if` statement.
-
-        This method evaluates the truthiness of the `if` test using
-        `typeshed_client` APIs, and updates `self.if_stack` accordingly.
+        The test is evaluated syntactically using `typeshed_client`.
         """
-        condition_as_libcst_module = libcst.Module(
-            body=[libcst.SimpleStatementLine(body=[libcst.Expr(value=node.test)])]
+        condition = typeshed_client.evaluate_expression_truthiness(
+            node.test, ctx=self.typeshed_client_context, file_path=self.stub_file_path
         )
-        condition_as_ast_expr = ast.parse(condition_as_libcst_module.code).body[0]
-        assert isinstance(condition_as_ast_expr, ast.Expr)
-        parsed_condition = typeshed_client.evaluate_expression_truthiness(
-            condition_as_ast_expr.value,
-            ctx=self.typeshed_client_context,
-            file_path=self.stub_file_path,
-        )
-        assert isinstance(parsed_condition, bool)
+        assert isinstance(condition, bool)
 
-        match self.if_stack:
-            case [*_, [*_, (last_if_node, _)]] if last_if_node.orelse is node:
-                self.if_stack[-1].append((node, parsed_condition))
-            case _:
-                self.if_stack.append([(node, parsed_condition)])
+        self.visit_suite(node.body, reachable=reachable and condition)
 
-    @override
-    def leave_If(self, original_node: libcst.If, updated_node: libcst.If) -> libcst.If:
-        """Hook called when the transformer leaves an `if` statement."""
-        self.if_stack[-1].pop()
-        if not self.if_stack[-1]:
-            self.if_stack.pop()
-        return updated_node
+        maybe_elif = _real_elif_of_if(node, self.token_index)
 
-    @override
-    def visit_Else(self, node: libcst.Else) -> None:
-        """Hook called prior to visiting an `else` block in an `if`/`elif`/`else` chain.
+        if maybe_elif is not None:
+            self.visit_if(maybe_elif, reachable=reachable and not condition)
+        elif node.orelse:
+            self.visit_suite(node.orelse, reachable=reachable and not condition)
 
-        This hook is also called prior to visiting `else` blocks of `try`/`except`/`else`
-        and `while/else` constructs, but these are rare (and probably invalid) in stub files.
+    def visit_suite(self, body: list[ast.stmt], *, reachable: bool) -> None:
+        """Visit the statements in a suite and plan its attribute docstrings.
+
+        The stdlib AST represents both inline suites and physical indented suites as
+        statement lists. Only physical indented suites receive their own function-name
+        set and attribute-docstring pass; inline suites do not.
         """
-        match self.if_stack:
-            case [*_, [*_, (last_if, _)]] if last_if.orelse is node:
-                self.if_stack[-1].append(node)
+        is_indented = self._is_indented_suite(body)
+        if is_indented:
+            self.suite_visitation_stack.append(set())
+            self.block_depth += 1
 
-    @override
-    def leave_Else(
-        self, original_node: libcst.Else, updated_node: libcst.Else
-    ) -> libcst.Else:
-        """Hook called when the transformer leaves an `else` block."""
-        if self.if_stack and self.if_stack[-1][-1] is original_node:
-            self.if_stack[-1].pop()
-        return updated_node
+        for statement in body:
+            self.visit_statement(statement, reachable=reachable)
 
-    def document_class_or_function(
-        self, updated_node: DocumentableT, runtime_object: RuntimeValue
-    ) -> DocumentableT:
+        if is_indented:
+            indentation = self.block_depth
+            self.block_depth -= 1
+            self.suite_visitation_stack.pop()
+
+            # Don't add attribute docstrings to fields in `NamedTuple` classes.
+            # The generated docstrings for the properties in these classes
+            # are always things like "Alias for field number 0", which clutter
+            # the stubs and aren't useful.
+            if (
+                reachable
+                and not self.runtime_parents[-1].value.is_not_found()
+                and not self._runtime_parent_is_named_tuple()
+            ):
+                self._plan_attribute_docstrings(
+                    body,
+                    runtime_parent=self.runtime_parents[-1],
+                    indentation=indentation,
+                )
+
+    def _document_class_or_function(
+        self, node: Documentable, *, runtime_object: RuntimeValue, reachable: bool
+    ) -> None:
         """Attempt to add a docstring to a class or function definition."""
-        if not self.visiting_reachable_code():
-            return updated_node
+        if not reachable:
+            return
 
-        object_fullname = self.object_fullname(updated_node.name.value)
+        object_fullname = self.object_fullname(node.name)
         if object_fullname in self.blacklisted_objects:
-            return updated_node
+            return
 
-        if updated_node.get_docstring() is not None:  # ty: ignore[invalid-argument-type]
-            return updated_node
+        if ast.get_docstring(node, clean=False) is not None:
+            return
 
         docstring = get_runtime_docstring(runtime=runtime_object)
         if docstring is None:
-            return updated_node
+            return
 
         # E.g. we want to avoid a bajillion `__init__` docstrings that are just
         #
@@ -531,44 +771,300 @@ class DocstringAdder(libcst.CSTTransformer):
         #
         # Which is exactly what we get for `help(object.__init__)`
         if (
-            # not sure why mypy thinks this is redundant...!
-            isinstance(updated_node, libcst.FunctionDef)  # type: ignore[redundant-expr]
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
             and not isinstance(runtime_object.inner, types.ModuleType)
-            and updated_node.name.value in object.__dict__
+            and node.name in object.__dict__
         ):
             method_docstring_on_object = get_runtime_docstring(
-                runtime=RuntimeValue(inner=object.__dict__[updated_node.name.value])
+                runtime=RuntimeValue(inner=object.__dict__[node.name])
             )
             if docstring == method_docstring_on_object:
-                return updated_node
+                return
 
-        docstring_node = libcst.Expr(
-            libcst.SimpleString(triple_quoted_docstring(docstring))
+        self._plan_definition_docstring(node, docstring)
+
+    def _plan_definition_docstring(self, node: Documentable, docstring: str) -> None:
+        """Plan the source edit that inserts a class or function docstring."""
+        first_body_token = self.token_index.first_token(node.body[0])
+        suite_colon = self._previous_token_with_string(first_body_token, ":")
+        header_newline = self._next_token_of_kind(suite_colon, TokenKind(token.NEWLINE))
+        literal = triple_quoted_docstring(docstring)
+
+        if first_body_token.start.line_number == suite_colon.start.line_number:
+            # If the body is just a `...`, replace it with just the docstring.
+            match node.body:
+                case [ast.Expr(value=ast.Constant(value=types.EllipsisType()))]:
+                    pass
+                case _:
+                    return
+
+            # but preserve `type: ignore` comments
+            trailing_comment = self._trailing_comment(
+                self.token_index.last_token(node.body[0]), header_newline
+            )
+            newline = self._newline_text(header_newline)
+            child_indent = (
+                self._line_indentation(suite_colon.startpos) + self.default_indent
+            )
+            replacement = (
+                f"{trailing_comment}{newline}{child_indent}{literal}"
+                f"{header_newline.string}"
+            )
+            self.editor.replace(suite_colon.endpos, header_newline.endpos, replacement)
+            return
+
+        body_indent = self._line_indentation(first_body_token.startpos)
+        # For a physical indented suite, insert the docstring before the first body
+        # statement. A multiline `...` body is preserved rather than replaced.
+        newline = self._newline_text(header_newline)
+        prefix = "" if header_newline.string else newline
+        self.editor.insert(
+            header_newline.endpos, f"{prefix}{body_indent}{literal}{newline}"
         )
 
-        # If the body is just a `...`, replace it with just the docstring.
-        match updated_node.body:
-            case libcst.SimpleStatementSuite(
-                body=[libcst.Expr(value=libcst.Ellipsis())]
-            ):
-                new_body = libcst.IndentedBlock(
-                    body=[libcst.SimpleStatementLine(body=[docstring_node])],
-                    # but preserve `type: ignore` comments
-                    header=updated_node.body.trailing_whitespace,
-                )
-            case libcst.IndentedBlock():
-                new_body = updated_node.body.with_changes(
-                    body=list(
-                        chain(
-                            [libcst.SimpleStatementLine(body=[docstring_node])],
-                            updated_node.body.body,
-                        )
-                    )
-                )
-            case _:
-                return updated_node
+    def _plan_attribute_docstrings(
+        self, body: list[ast.stmt], *, runtime_parent: RuntimeParent, indentation: int
+    ) -> None:
+        """Add Sphinx-style 'attribute docstrings' to assignments in a suite.
 
-        return updated_node.with_changes(body=new_body)
+        The suite could be the body of a module, class, function,
+        `if` block, `elif` block, or `else` block.
+        """
+        # Semicolon-separated statements share a terminal NEWLINE token. Count all
+        # statements by that token's ending character offset so attribute docstrings are
+        # only added to assignments that are the sole statement on their physical line.
+        line_counts = Counter(
+            TextOffset(self._terminal_newline(statement).endpos) for statement in body
+        )
+
+        for index, statement in enumerate(body):
+            next_statement = body[index + 1] if index + 1 < len(body) else None
+
+            if isinstance(statement, ast.If):
+                final_statement = _final_statement_of_if(statement)
+                if (
+                    _is_string_statement(final_statement)
+                    or final_statement in self.attribute_documented
+                ):
+                    self._ensure_blank_line_before_next(final_statement, next_statement)
+                    continue
+
+            # If it's an assignment that we could potentially add a docstring to,
+            # and it is the only statement on its physical line...
+            statement_newline = self._terminal_newline(statement)
+            if line_counts[statement_newline.endpos] != 1:
+                continue
+            # ... and there is no docstring already present...
+            if next_statement is not None and _is_string_statement(next_statement):
+                continue
+
+            assignment: ast.Assign | ast.AnnAssign
+            target: ast.expr
+            match statement:
+                case ast.AnnAssign(target=target):
+                    assignment = statement
+                case ast.Assign(targets=[target]):
+                    assignment = statement
+                case _:
+                    continue
+
+            if not isinstance(target, ast.Name):
+                continue
+
+            # ... then try to add a docstring to it.
+            runtime_name = target.id
+            runtime_fullname = f"{runtime_parent.name}.{runtime_name}"
+            if runtime_fullname in self.blacklisted_objects:
+                continue
+
+            runtime_value = get_runtime_object_for_stub(runtime_name, runtime_parent)
+
+            if runtime_value is None:
+                continue
+
+            # -------------------------------------------------------------------------
+            # BEGINNING of heuristics to avoid adding undesirable attribute docstrings.
+            # -------------------------------------------------------------------------
+
+            # Don't add the module docstring of `some_module` below `x = some_module`
+            if isinstance(runtime_value.inner, types.ModuleType):
+                continue
+
+            if isinstance(
+                runtime_value.inner,
+                (
+                    type,
+                    types.FunctionType,
+                    types.BuiltinFunctionType,
+                    types.GenericAlias,
+                    types.MethodWrapperType,
+                ),
+            ):
+                # Don't add the function docstring below `x = some_function`
+                if isinstance(assignment, ast.Assign):
+                    continue
+
+                # Don't add the docstring for `dict` below `x: TypeAlias = dict[str, Any]`
+                if assignment.value is not None:
+                    continue
+
+                # Don't add docstrings to things that look like `x: type[Foo]`
+                # if the runtime value is a class.
+                # Also, don't add docstrings to things that look like `x: Callable[..., Foo]`
+                # if the runtime value is a function.
+                #
+                # ... But exclude `typing.Generic` here.
+                # It's annotated with `Generic: type[_Generic]` in typeshed,
+                # at least currently, and that's an *extremely* useful docstring :-(
+                if (
+                    isinstance(runtime_value.inner, (type, types.FunctionType))
+                    and isinstance(assignment.annotation, ast.Subscript)
+                    and runtime_fullname != "typing.Generic"
+                ):
+                    continue
+
+                # Don't add the docstring for a function or class below `x: Foo`
+                # if the runtime function or class comes from another module
+                try:
+                    runtime_module = runtime_value.inner.__module__
+                except Exception:
+                    pass
+                else:
+                    if isinstance(runtime_parent.value.inner, types.ModuleType):
+                        parent_module = runtime_parent.value.inner.__name__
+                    else:
+                        try:
+                            parent_module = runtime_parent.value.inner.__module__
+                        except Exception:
+                            parent_module = None
+                    if parent_module is not None and runtime_module != parent_module:
+                        continue
+
+            # --------------------------------------------------------------------
+            # END heuristics for avoiding adding undesirable attribute docstrings.
+            # --------------------------------------------------------------------
+
+            docstring = get_runtime_docstring(runtime_value)
+            if docstring is None:
+                continue
+
+            docstring = docstring.strip(" \t")
+            docstring_lines = docstring.split("\n")
+            docstring = "\n".join([
+                docstring_lines[0],
+                textwrap.dedent("\n".join(docstring_lines[1:])),
+            ])
+
+            # If we're visiting an indented block, indent the docstring
+            if indentation and "\n" in docstring:
+                indentation_string = " " * indentation * 4
+                docstring = (
+                    textwrap.indent(docstring, prefix=indentation_string)
+                    + indentation_string
+                ).lstrip(" \t")
+            else:
+                indentation_string = None
+
+            source_indent = self._line_indentation(
+                self.token_index.first_token(statement).startpos
+            )
+            newline = self._newline_text(statement_newline)
+            prefix = "" if statement_newline.string else newline
+            literal = triple_quoted_docstring(docstring, indentation=indentation_string)
+            self.editor.insert(
+                statement_newline.endpos,
+                f"{prefix}{source_indent}{literal}{statement_newline.string}",
+            )
+            self.attribute_documented.add(statement)
+            self._ensure_blank_line_before_next(statement, next_statement)
+
+    def _ensure_blank_line_before_next(
+        self, statement: ast.stmt, next_statement: ast.stmt | None
+    ) -> None:
+        """Plan a blank line after an added docstring when one is not already present."""
+        if next_statement is None:
+            return
+
+        # If we just added a docstring to the previous statement,
+        # add a blank line before this statement.
+        # Black will not do this for us.
+        statement_newline = self._terminal_newline(statement)
+        next_statement_start = self.token_index.first_token(next_statement).startpos
+        next_line_start = self._line_start(next_statement_start)
+        gap = self.source[statement_newline.endpos : next_line_start]
+        if not any(not line.strip() for line in gap.splitlines()):
+            blank_line_indent = self._line_indentation(next_statement_start)
+            self.editor.insert(
+                statement_newline.endpos,
+                blank_line_indent + self._newline_text(statement_newline),
+            )
+
+    def _runtime_parent_is_named_tuple(self) -> bool:
+        """Return whether the current runtime parent is a NamedTuple-like class."""
+        runtime_parent = self.runtime_parents[-1].value.inner
+        return (
+            isinstance(runtime_parent, type)
+            and issubclass(runtime_parent, tuple)
+            and hasattr(runtime_parent, "_fields")
+        )
+
+    def _is_indented_suite(self, body: list[ast.stmt]) -> bool:
+        first_token = self.token_index.first_token(body[0])
+        suite_colon = self._previous_token_with_string(first_token, ":")
+        return bool(suite_colon.start.line_number != first_token.start.line_number)
+
+    def _previous_token_with_string(self, start: Token, string: str) -> Token:
+        for index in range(start.index - 1, -1, -1):
+            candidate = self.token_index.tokens[index]
+            if candidate.string == string:
+                return candidate
+        raise RuntimeError(f"Could not find preceding {string!r} token")
+
+    def _next_token_of_kind(self, start: Token, token_kind: TokenKind) -> Token:
+        for candidate in self.token_index.tokens[start.index :]:
+            if candidate.kind == token_kind:
+                return candidate
+        raise RuntimeError(f"Could not find token kind {token_kind}")
+
+    def _terminal_newline(self, node: ast.stmt) -> Token:
+        return self._next_token_of_kind(
+            self.token_index.last_token(node), TokenKind(token.NEWLINE)
+        )
+
+    def _trailing_comment(self, last_body_token: Token, newline: Token) -> str:
+        saw_semicolon = False
+        for candidate in self.token_index.tokens[
+            last_body_token.index + 1 : newline.index
+        ]:
+            if candidate.string == ";":
+                saw_semicolon = True
+            if candidate.kind == TokenKind(token.COMMENT):
+                if saw_semicolon:
+                    return self.source[candidate.startpos : candidate.endpos]
+                whitespace_start = candidate.startpos
+                while (
+                    whitespace_start > last_body_token.endpos
+                    and self.source[whitespace_start - 1] in " \t"
+                ):
+                    whitespace_start = TextOffset(whitespace_start - 1)
+                return self.source[whitespace_start : candidate.endpos]
+        return ""
+
+    def _newline_text(self, newline: Token) -> str:
+        return newline.string or self.default_newline
+
+    def _line_start(self, position: TextOffset) -> TextOffset:
+        return TextOffset(self.source.rfind("\n", 0, position) + 1)
+
+    def _line_indentation(self, position: TextOffset) -> str:
+        line_start = self._line_start(position)
+        indentation_end = line_start
+        while (
+            indentation_end < len(self.source)
+            and self.source[indentation_end] in " \t\f"
+        ):
+            indentation_end = TextOffset(indentation_end + 1)
+        return self.source[line_start:indentation_end]
 
 
 def get_runtime_docstring(runtime: RuntimeValue) -> str | None:
@@ -628,198 +1124,6 @@ def get_runtime_docstring(runtime: RuntimeValue) -> str | None:
         return None
 
     return runtime_docstring
-
-
-SuiteItemT = TypeVar(
-    "SuiteItemT",
-    "libcst.SimpleStatementLine | libcst.BaseCompoundStatement",
-    "libcst.BaseSmallStatement | libcst.BaseStatement",
-)
-
-
-def final_statement_of_if(
-    node: libcst.If,
-) -> libcst.BaseStatement | libcst.BaseSmallStatement:
-    """Retrieve the final statement of an `if`/`elif`/`else` chain."""
-    match node.orelse:
-        case None:
-            return node.body.body[-1]
-        case libcst.Else():
-            return node.orelse.body.body[-1]
-        case _:
-            return final_statement_of_if(node.orelse)
-
-
-def add_attribute_docstrings(
-    body: Sequence[SuiteItemT],
-    *,
-    runtime_parent: RuntimeParent,
-    blacklisted_objects: frozenset[str],
-    indentation: int,
-) -> list[SuiteItemT]:
-    """Add Sphinx-style 'attribute docstrings' to assignments in a suite.
-
-    The suite could be the body of a module, class, function,
-    `if` block, `elif` block, or `else` block.
-    """
-    new_body: list[SuiteItemT] = []
-    added_docstring_to_previous = False
-    for statement, next_statement in itertools.zip_longest(body, body[1:]):
-        # If we just added a docstring to the previous statement,
-        # add a blank line before this statement.
-        # Black will not do this for us.
-        if (
-            added_docstring_to_previous
-            and isinstance(
-                statement, (libcst.SimpleStatementLine, libcst.BaseCompoundStatement)
-            )
-            and all(line.comment is not None for line in statement.leading_lines)
-        ):
-            new_body.append(
-                statement.with_changes(
-                    leading_lines=[libcst.EmptyLine(), *statement.leading_lines]  # type: ignore[has-type]
-                )
-            )
-        else:
-            new_body.append(statement)
-
-        added_docstring_to_previous = False
-
-        if isinstance(statement, libcst.If):
-            match final_statement_of_if(statement):
-                case libcst.SimpleStatementLine(
-                    body=[libcst.Expr(value=libcst.SimpleString())]
-                ):
-                    added_docstring_to_previous = True
-                    continue
-
-        # If it's an annotated assignment that we could potentially add a docstring to...
-        if (
-            isinstance(statement, libcst.SimpleStatementLine)
-            and len(statement.body) == 1
-            # ... and there is no docstring already present...
-            and not (
-                isinstance(next_statement, libcst.SimpleStatementLine)
-                and len(next_statement.body) == 1
-                and isinstance(next_statement.body[0], libcst.Expr)
-                and isinstance(next_statement.body[0].value, libcst.SimpleString)
-            )
-        ):
-            assignment = statement.body[0]
-            match assignment:
-                case libcst.AnnAssign():
-                    target = assignment.target
-                case libcst.Assign(targets=[single_target]):
-                    target = single_target.target
-                case _:
-                    continue
-
-            if not isinstance(target, libcst.Name):
-                continue
-
-            # ... then try to add a docstring to it.
-            runtime_name = target.value
-            runtime_fullname = f"{runtime_parent.name}.{runtime_name}"
-            if runtime_fullname in blacklisted_objects:
-                continue
-
-            runtime_value = get_runtime_object_for_stub(runtime_name, runtime_parent)
-
-            if runtime_value is None:
-                continue
-
-            # -------------------------------------------------------------------------
-            # BEGINNING of heuristics to avoid adding undesirable attribute docstrings.
-            # -------------------------------------------------------------------------
-
-            # Don't add the module docstring of `some_module` below `x = some_module`
-            if isinstance(runtime_value.inner, types.ModuleType):
-                continue
-
-            if isinstance(
-                runtime_value.inner,
-                (
-                    type,
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    types.GenericAlias,
-                    types.MethodWrapperType,
-                ),
-            ):
-                # Don't add the function docstring below `x = some_function`
-                if isinstance(assignment, libcst.Assign):
-                    continue
-
-                # Don't add the docstring for `dict` below `x: TypeAlias = dict[str, Any]`
-                if assignment.value is not None:
-                    continue
-
-                # Don't add docstrings to things that look like `x: type[Foo]`
-                # if the runtime value is a class.
-                # Also, don't add docstrings to things that look like `x: Callable[..., Foo]`
-                # if the runtime value is a function.
-                #
-                # ... But exclude `typing.Generic` here.
-                # It's annotated with `Generic: type[_Generic]` in typeshed,
-                # at least currently, and that's an *extremely* useful docstring :-(
-                if (
-                    isinstance(runtime_value.inner, (type, types.FunctionType))
-                    and isinstance(assignment.annotation.annotation, libcst.Subscript)
-                    and runtime_fullname != "typing.Generic"
-                ):
-                    continue
-
-                # Don't add the docstring for a function or class below `x: Foo`
-                # if the runtime function or class comes from another module
-                try:
-                    runtime_module = runtime_value.inner.__module__
-                except Exception:
-                    pass
-                else:
-                    if isinstance(runtime_parent.value.inner, types.ModuleType):
-                        parent_module = runtime_parent.value.inner.__name__
-                    else:
-                        try:
-                            parent_module = runtime_parent.value.inner.__module__
-                        except Exception:
-                            parent_module = None
-                    if parent_module is not None and runtime_module != parent_module:
-                        continue
-
-            # --------------------------------------------------------------------
-            # END heuristics for avoiding adding undesirable attribute docstrings.
-            # --------------------------------------------------------------------
-
-            docstring = get_runtime_docstring(runtime_value)
-            if docstring is None:
-                continue
-
-            docstring = docstring.strip(" \t")
-            docstring_lines = docstring.split("\n")
-            docstring = "\n".join([
-                docstring_lines[0],
-                textwrap.dedent("\n".join(docstring_lines[1:])),
-            ])
-
-            # If we're visiting an indented block, indent the docstring
-            if indentation and "\n" in docstring:
-                indentation_string = " " * indentation * 4
-                docstring = (
-                    textwrap.indent(docstring, prefix=indentation_string)
-                    + indentation_string
-                ).lstrip(" \t")
-            else:
-                indentation_string = None
-
-            docstring_node = libcst.SimpleString(
-                triple_quoted_docstring(docstring, indentation=indentation_string)
-            )
-            new_body.append(
-                libcst.SimpleStatementLine(body=[libcst.Expr(docstring_node)])
-            )
-            added_docstring_to_previous = True
-
-    return new_body
 
 
 class NOT_FOUND:
@@ -897,30 +1201,23 @@ def transform(
     blacklisted_objects: frozenset[str],
 ) -> str:
     """Add runtime docstrings to stub source and return the transformed source."""
-    parsed_module = libcst.parse_module(source)
+    parsed_module = ast.parse(source)
 
-    if runtime_module.__doc__ and parsed_module.get_docstring() is None:
+    if runtime_module.__doc__ and ast.get_docstring(parsed_module, clean=False) is None:
         docstring = triple_quoted_docstring(runtime_module.__doc__) + "\n"
         source = docstring + source if source.strip() else docstring
-        parsed_module = libcst.parse_module(source)
+        parsed_module = ast.parse(source)
 
     transformer = DocstringAdder(
+        source=source,
+        parsed_module=parsed_module,
         module_name=module_name,
         runtime_module=runtime_module,
         stub_file_path=stub_file_path,
         typeshed_client_context=typeshed_client_context,
         blacklisted_objects=blacklisted_objects,
     )
-    parsed_module = parsed_module.visit(transformer)
-    parsed_module = parsed_module.with_changes(
-        body=add_attribute_docstrings(
-            parsed_module.body,
-            runtime_parent=RuntimeParent(module_name, RuntimeValue(runtime_module)),
-            blacklisted_objects=blacklisted_objects,
-            indentation=0,
-        )
-    )
-    return parsed_module.code
+    return transformer.transform()
 
 
 def add_docstrings_to_stub(
@@ -954,7 +1251,7 @@ def add_docstrings_to_stub(
             typeshed_client_context=context,
             blacklisted_objects=blacklisted_objects,
         )
-    except libcst.ParserSyntaxError as e:
+    except SyntaxError as e:
         log(f"Could not parse '{module_name}' at {path}: {e}")
         return
     path.write_text(new_module, encoding="utf-8")
