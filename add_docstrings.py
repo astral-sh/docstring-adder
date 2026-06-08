@@ -257,7 +257,7 @@ def triple_quoted_docstring(content: str, indentation: str | None = None) -> str
     quote = possible_quotes[0]
 
     # Escape the final quote, if necessary
-    if quote == escaped_string[-1]:
+    if quote[0] == escaped_string[-1]:
         escaped_string = escaped_string[:-1] + "\\" + escaped_string[-1]
 
     return f"{quote}{escaped_string}{quote}"
@@ -473,7 +473,7 @@ class DocstringAdder:
             <function Foo.__method at 0x105a1e020>
         """
         parent = self.runtime_parents[-1]
-        if not isinstance(parent.value, type):
+        if not isinstance(parent.value.inner, type):
             return name
 
         if name.startswith("__") and not name.endswith("__"):
@@ -1066,17 +1066,23 @@ def get_runtime_object_for_stub(
     return RuntimeValue(inner=runtime)
 
 
-def transform_stub_source(
+def transform(
     source: str,
+    runtime_module: types.ModuleType,
     *,
     module_name: str,
-    runtime_module: types.ModuleType,
     stub_file_path: Path,
     typeshed_client_context: typeshed_client.SearchContext,
     blacklisted_objects: frozenset[str],
 ) -> str:
-    """Add runtime docstrings to already-loaded stub source."""
-    adder = DocstringAdder(
+    """Add runtime docstrings to stub source and return the transformed source."""
+    parsed_module = ast.parse(source)
+
+    if runtime_module.__doc__ and ast.get_docstring(parsed_module, clean=False) is None:
+        docstring = triple_quoted_docstring(runtime_module.__doc__) + "\n"
+        source = docstring + source if source.strip() else docstring
+
+    transformer = DocstringAdder(
         source=source,
         parsed_module=ast.parse(source),
         module_name=module_name,
@@ -1085,7 +1091,7 @@ def transform_stub_source(
         typeshed_client_context=typeshed_client_context,
         blacklisted_objects=blacklisted_objects,
     )
-    return adder.transform()
+    return transformer.transform()
 
 
 def add_docstrings_to_stub(
@@ -1111,22 +1117,17 @@ def add_docstrings_to_stub(
 
     stub_source = path.read_text(encoding="utf-8")
     try:
-        parsed_module = ast.parse(stub_source)
+        new_module = transform(
+            stub_source,
+            runtime_module,
+            module_name=module_name,
+            stub_file_path=path,
+            typeshed_client_context=context,
+            blacklisted_objects=blacklisted_objects,
+        )
     except SyntaxError as e:
         log(f"Could not parse '{module_name}' at {path}: {e}")
         return
-
-    if runtime_module.__doc__ and ast.get_docstring(parsed_module, clean=False) is None:
-        docstring = triple_quoted_docstring(runtime_module.__doc__) + "\n"
-        stub_source = docstring + stub_source if stub_source.strip() else docstring
-    new_module = transform_stub_source(
-        stub_source,
-        module_name=module_name,
-        runtime_module=runtime_module,
-        stub_file_path=path,
-        typeshed_client_context=context,
-        blacklisted_objects=blacklisted_objects,
-    )
     path.write_text(new_module, encoding="utf-8")
 
     check_no_destructive_changes(
@@ -1349,7 +1350,7 @@ def load_blacklist(path: Path) -> frozenset[str]:
     return entries - {""}
 
 
-def _main() -> None:
+def _main(cli_args: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=RawDescriptionRichHelpFormatter
     )
@@ -1391,7 +1392,7 @@ def _main() -> None:
         ),
         default=(),
     )
-    args = parser.parse_args()
+    args = parser.parse_args(cli_args)
 
     stdlib_path = Path(args.stdlib_path) if args.stdlib_path else None
     if stdlib_path is not None and not (

@@ -58,6 +58,9 @@ repos:
         priority: 0
       - id: end-of-file-fixer
         priority: 0
+      - id: name-tests-test
+        args: [--pytest-test-first]
+        priority: 0
       - id: trailing-whitespace
         priority: 1
   - repo: https://github.com/igorshubovych/markdownlint-cli

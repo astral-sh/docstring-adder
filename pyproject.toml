@@ -57,13 +57,16 @@ allow-direct-references = true
 
 [dependency-groups]
 dev = [
+    "covdefaults==2.3.0",
+    "coverage==7.14.1",
     "mypy==1.20.2",
     "pytest==9.0.3",
     "ty==0.0.35",
+    "black"
 ]
 
 [tool.mypy]
-files = ['*.py']
+files = ['**/*.py']
 show_traceback = true
 pretty = true
 strict = true
@@ -77,6 +80,22 @@ python_version = "3.10"
 possibly-unresolved-reference = "error"
 division-by-zero = "error"
 unused-ignore-comment = "error"
+
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers"
+xfail_strict = true
+
+[tool.coverage.run]
+# Note that many settings are automatically added due to this plugin
+plugins = ["covdefaults"]
+
+[tool.coverage.report]
+# This extends the lines that covdefaults already excludes
+exclude_lines = ['^if typing.TYPE_CHECKING:$']
+fail_under = 90
+
+[tool.coverage.covdefaults]
+subtract_omit = "*/__main__.py"
 
 [tool.ruff]
 fix = true
@@ -136,6 +155,9 @@ unfixable = [
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D"]
 
 [tool.ruff.lint.isort]
 combine-as-imports = true

@@ -124,7 +124,11 @@ jobs:
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           version: "0.11.12"
-      - run: uv run --python=${{ matrix.python-version }} pytest
+      - name: Run tests
+        run: |
+          uv python pin ${{ matrix.python-version }}
+          uv run coverage run -m pytest
+          uv run coverage report
 
   mypy:
     name: Run mypy
