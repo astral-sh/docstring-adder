@@ -4,7 +4,10 @@ import sys
 import textwrap
 import types
 from pathlib import Path
+from unittest.mock import patch
 
+import black
+import pytest
 import typeshed_client
 
 import add_docstrings
@@ -25,41 +28,59 @@ def transform(source: str, runtime_module: types.ModuleType) -> str:
     )
 
 
-class DocumentedValue:
-    """Runtime value whose instance docstring is useful for a stub attribute."""
+def blacken(source: str) -> str:
+    return black.format_str(source, mode=black.Mode(is_pyi=True))
+
+
+def module_from_source(source: str) -> types.ModuleType:
+    """Create a runtime module by executing the given source code."""
+    module = types.ModuleType("test_module")
+    exec(textwrap.dedent(source), module.__dict__)
+    return module
 
 
 def runtime_module() -> types.ModuleType:
     """Return a runtime module with documented definitions and attributes."""
-    module = types.ModuleType("test_module")
+    return module_from_source(
+        '''\
+        def f() -> None:
+            """Function docs."""
 
-    def f() -> None:
-        """Function docs."""
+        def g() -> None:
+            """Other function docs."""
 
-    def g() -> None:
-        """Other function docs."""
+        class C:
+            def method(self) -> None:
+                """Method docs."""
 
-    class C:
-        def method(self) -> None:
-            """Method docs."""
+            def __hidden(self) -> None:
+                """Hidden method docs."""
 
-        def __hidden(self) -> None:
-            """Hidden method docs."""
+        class Foo: ...
 
-    class D:
-        """Class docs."""
+        x = Foo()
+        x.__doc__ = "Attribute docs."
 
-    value = DocumentedValue()
-    value.__doc__ = "Attribute docs."
-    module.__dict__.update(f=f, g=g, C=C, D=D, x=value, y=value, z=value)
-    type.__setattr__(C, "x", value)
-    return module
+        y = z = x
+
+        class D:
+            """Class docs."""
+
+            x = x
+        '''
+    )
 
 
 def test_module_docstring_is_added() -> None:
     """The runtime module docstring is added before definition docstrings."""
-    module = runtime_module()
-    module.__doc__ = "Module docs."
+    module = module_from_source(
+        '''\
+        """Module docs."""
+
+        def f() -> None:
+            """Function docs."""
+        '''
+    )
     source = "def f(): ...\n"
     expected = textwrap.dedent(
         '''\
@@ -69,6 +90,133 @@ def test_module_docstring_is_added() -> None:
         '''
     )
     assert transform(source, module) == expected
+
+
+def test_module_docstring_is_added_to_an_empty_stub() -> None:
+    """A runtime module can document an otherwise empty marker stub."""
+    module = module_from_source('"""Module docs."""')
+    assert transform("", module) == '"""Module docs."""\n'
+
+
+def test_existing_module_docstring_is_preserved() -> None:
+    """A stub's existing module docstring is not replaced."""
+    module = module_from_source('"""Runtime module docs."""')
+    source = '"""Stub module docs."""\n'
+    assert transform(source, module) == source
+
+
+@pytest.mark.parametrize(
+    ("runtime_docstring", "expected"),
+    [
+        (
+            "A short docstring.",
+            '''\
+            def f() -> None:
+                """A short docstring."""
+            ''',
+        ),
+        (
+            "A path containing a backslash: C:\\Users",
+            '''\
+            def f() -> None:
+                """A path containing a backslash: C:\\\\Users"""
+            ''',
+        ),
+        (
+            """\
+            A multiline docstring.
+
+            More detail.""",
+            '''\
+            def f() -> None:
+                """A multiline docstring.
+
+                More detail.
+                """
+            ''',
+        ),
+        (
+            "A docstring with a trailing newline.\n",
+            '''\
+            def f() -> None:
+                """A docstring with a trailing newline."""
+            ''',
+        ),
+        (
+            "A docstring containing ''' triple quotes.",
+            '''\
+            def f() -> None:
+                """A docstring containing \'\'\' triple quotes."""
+            ''',
+        ),
+        (
+            "Use \"\"\" or ''' for multiline strings.",
+            """\
+            def f() -> None:
+                '''Use \"\"\" or \\'\\'\\' for multiline strings.'''
+            """,
+        ),
+        (
+            "",
+            '''\
+            def f() -> None:
+                """"""
+            ''',
+        ),
+    ],
+)
+def test_runtime_docstring_content_is_preserved_when_transforming(
+    runtime_docstring: str, expected: str
+) -> None:
+    """Inserted function docstrings preserve realistic runtime content."""
+
+    before = textwrap.dedent("""\
+        def f() -> None: ...
+        """)
+
+    module = module_from_source(
+        f"""\
+        def f():
+            {runtime_docstring!r}
+        """
+    )
+
+    transformed = blacken(transform(before, module))
+    assert transformed == textwrap.dedent(expected)
+
+
+@pytest.mark.parametrize(
+    ("runtime", "expected"),
+    [
+        (
+            """\
+            def f():
+                "A docstring containing ''' and ending with a double quote: \\""
+            """,
+            '''\
+            def f():
+                """A docstring containing \'\'\' and ending with a double quote: \\""""
+            ''',
+        ),
+        (
+            '''\
+            def f():
+                'A docstring containing """ and ending with a single quote: \\''
+            ''',
+            """\
+            def f():
+                '''A docstring containing \"\"\" and ending with a single quote: \\''''
+            """,
+        ),
+    ],
+)
+def test_transform_escapes_a_final_docstring_delimiter_quote(
+    runtime: str, expected: str
+) -> None:
+    """A final quote cannot merge with the selected triple-quote delimiter."""
+    module = module_from_source(runtime)
+    transformed = transform("def f(): ...\n", module)
+    assert transformed == textwrap.dedent(expected)
 
 
 def test_class_docstring_is_added() -> None:
@@ -204,6 +352,40 @@ def test_missing_runtime_class_is_unchanged() -> None:
     assert transform(source, runtime_module()) == source
 
 
+def test_missing_runtime_function_is_unchanged() -> None:
+    """An API absent from the runtime module is left alone."""
+    source = "def optional_api() -> None: ...\n"
+    assert transform(source, runtime_module()) == source
+
+
+def test_functions_in_a_missing_runtime_class_are_unchanged() -> None:
+    """Definitions nested under a missing runtime class remain untouched."""
+    source = textwrap.dedent(
+        """\
+        class OptionalBackend:
+            def connect(self) -> None: ...
+        """
+    )
+    assert transform(source, runtime_module()) == source
+
+
+def test_unreachable_missing_runtime_function_is_not_logged(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An API absent because of a version guard does not produce a warning."""
+    source = textwrap.dedent(
+        """\
+        import sys
+
+        if sys.version_info >= (3, 15):
+            def future_api() -> None: ...
+        """
+    )
+    with patch.object(sys, "version_info", (3, 14)):
+        assert transform(source, runtime_module()) == source
+    assert "Could not find" not in capsys.readouterr().out
+
+
 def test_unreachable_branch_is_not_documented() -> None:
     """Only the reachable arm of a version check receives docstrings."""
     source = textwrap.dedent(
@@ -264,6 +446,218 @@ def test_existing_docstring_is_preserved() -> None:
         '''
     )
     assert transform(source, runtime_module()) == source
+
+
+def test_existing_attribute_docstring_is_preserved() -> None:
+    """An existing attribute docstring is not replaced."""
+    source = textwrap.dedent(
+        '''\
+        x: int
+        """Stub attribute docs."""
+        '''
+    )
+    assert transform(source, runtime_module()) == source
+
+
+def test_documented_assignment_gets_an_attribute_docstring() -> None:
+    """A simple stub assignment can receive an attribute docstring."""
+    source = "x = ...\n"
+    expected = textwrap.dedent(
+        '''\
+        x = ...
+        """Attribute docs."""
+        '''
+    )
+    assert transform(source, runtime_module()) == expected
+
+
+def test_blacklisted_attribute_is_unchanged() -> None:
+    """Object blacklists apply to module attributes as well as definitions."""
+    module = runtime_module()
+    source = "x: int\n"
+    context = typeshed_client.get_search_context(
+        version=sys.version_info[:2], platform=sys.platform
+    )
+    transformed = add_docstrings.transform(
+        source,
+        module,
+        module_name=module.__name__,
+        stub_file_path=Path(f"{module.__name__}.pyi"),
+        typeshed_client_context=context,
+        blacklisted_objects=frozenset({f"{module.__name__}.x"}),
+    )
+    assert transformed == source
+
+
+def test_type_alias_does_not_get_the_aliased_class_docstring() -> None:
+    """A type alias is not documented with the runtime class's docstring."""
+    module = module_from_source(
+        '''\
+        class D:
+            """Class docs."""
+
+        Alias = D
+        '''
+    )
+    source = textwrap.dedent(
+        """\
+        from dependency import D
+
+        Alias = D
+        """
+    )
+    assert transform(source, module) == source
+
+
+def test_annotated_type_alias_does_not_get_the_aliased_class_docstring() -> None:
+    """An explicit TypeAlias is not documented with the aliased class's docs."""
+    module = module_from_source(
+        '''\
+        class D:
+            """Class docs."""
+
+        Alias = D
+        '''
+    )
+    source = textwrap.dedent(
+        """\
+        from dependency import D
+        from typing_extensions import TypeAlias
+
+        Alias: TypeAlias = D
+        """
+    )
+    assert transform(source, module) == source
+
+
+def test_callable_attribute_does_not_get_the_function_docstring() -> None:
+    """A callable-valued variable is not documented as a function definition."""
+    module = module_from_source(
+        '''\
+        def f() -> None:
+            """Function docs."""
+
+        factory = f
+        '''
+    )
+    source = textwrap.dedent(
+        """\
+        from collections.abc import Callable
+
+        factory: Callable[[], str]
+        """
+    )
+    assert transform(source, module) == source
+
+
+def test_undocumented_attribute_is_unchanged() -> None:
+    """A runtime value without useful docs leaves its stub attribute unchanged."""
+    module = module_from_source(
+        """\
+        class Undocumented:
+            __doc__ = None
+
+        undocumented = Undocumented()
+        """
+    )
+    source = "undocumented: object\n"
+    assert transform(source, module) == source
+
+
+def test_generic_instance_docstring_is_not_added() -> None:
+    """A generic runtime type's docstring is not copied to an instance attribute."""
+    module = module_from_source("sentinel = object()")
+    source = "sentinel: object\n"
+    assert transform(source, module) == source
+
+
+def test_inherited_object_method_docstring_is_not_added() -> None:
+    """Generic documentation inherited from `builtins.object` is not copied into ordinary classes."""
+    module = module_from_source(
+        """\
+        class Empty:
+            pass
+        """
+    )
+    source = textwrap.dedent(
+        """\
+        class Empty:
+            def __init__(self) -> None: ...
+        """
+    )
+
+    # `object.__init__.__doc__` is:
+    #
+    # > Initialize self.  See help(type(self)) for accurate signature.
+    #
+    # which isn't a useful docstring, so we don't add it to
+    # `Empty.__init__` in the stub.
+    assert transform(source, module) == source
+
+
+def test_overridden_object_method_docstring_is_added() -> None:
+    """Useful documentation on an overridden `object` method is preserved."""
+    module = module_from_source(
+        '''\
+        class Custom:
+            def __init__(self) -> None:
+                """Custom initializer docs."""
+        '''
+    )
+    source = textwrap.dedent(
+        """\
+        class Custom:
+            def __init__(self) -> None: ...
+        """
+    )
+    expected = textwrap.dedent(
+        '''\
+        class Custom:
+            def __init__(self) -> None:
+                """Custom initializer docs."""
+        '''
+    )
+    assert transform(source, module) == expected
+
+
+def test_named_tuple_field_docstrings_are_not_added() -> None:
+    """Generated field-number docs are omitted from NamedTuple fields."""
+    module = module_from_source(
+        """\
+        from typing import NamedTuple
+
+        class Point(NamedTuple):
+            x: int
+            y: int
+        """
+    )
+    original_stub = textwrap.dedent(
+        """\
+        from typing import NamedTuple
+
+        class Point(NamedTuple):
+            x: int
+            y: int
+        """
+    )
+
+    # We don't add the generated docstrings like "Alias for field number 0"
+    # to the `x` and `y` attributes, since those aren't useful to users.
+    expected_stub = textwrap.dedent(
+        '''\
+        from typing import NamedTuple
+
+        class Point(NamedTuple):
+            """Point(x, y)"""
+
+            x: int
+            y: int
+        '''
+    )
+
+    transformed = blacken(transform(original_stub, module))
+
+    assert transformed == expected_stub
 
 
 def test_tabs_are_preserved() -> None:
@@ -350,10 +744,101 @@ def test_reachable_else_if_is_documented() -> None:
     assert transform(source, runtime_module()) == expected
 
 
+@pytest.mark.parametrize(
+    ("version_guard", "expected"),
+    [
+        (
+            """\
+            import sys
+
+            if sys.version_info >= (3, 8):
+                x: int
+
+            def f() -> None: ...
+            """,
+            '''\
+            import sys
+
+            if sys.version_info >= (3, 8):
+                x: int
+                """Attribute docs."""
+
+            def f() -> None:
+                """Function docs."""
+            ''',
+        ),
+        (
+            """\
+            import sys
+
+            if sys.version_info >= (3, 15):
+                y: int
+            else:
+                x: int
+
+            def f() -> None: ...
+            """,
+            '''\
+            import sys
+
+            if sys.version_info >= (3, 15):
+                y: int
+            else:
+                x: int
+                """Attribute docs."""
+
+            def f() -> None:
+                """Function docs."""
+            ''',
+        ),
+        (
+            """\
+            import sys
+
+            if sys.version_info >= (3, 15):
+                y: int
+            elif sys.version_info >= (3, 8):
+                x: int
+
+            def f() -> None: ...
+            """,
+            '''\
+            import sys
+
+            if sys.version_info >= (3, 15):
+                y: int
+            elif sys.version_info >= (3, 8):
+                x: int
+                """Attribute docs."""
+
+            def f() -> None:
+                """Function docs."""
+            ''',
+        ),
+    ],
+)
+def test_attribute_docstring_at_end_of_version_guard_is_followed_by_blank_line(
+    version_guard: str, expected: str
+) -> None:
+    """A documented version-guard branch remains separated from following APIs."""
+    source = textwrap.dedent(version_guard)
+    expected = textwrap.dedent(expected)
+    transformed = blacken(transform(source, runtime_module()))
+    assert transformed == expected
+
+
 def test_multiline_attribute_docstring_in_else_if_is_indented() -> None:
     """A physical `else` suite contributes to attribute-docstring indentation."""
-    module = runtime_module()
-    module.x.__doc__ = "First line.\nSecond line."
+    module = module_from_source(
+        """\
+        class Foo: ...
+
+        x = Foo()
+
+        x.__doc__ = "First line.\\nSecond line."
+
+        """
+    )
     source = textwrap.dedent(
         """\
         import sys
