@@ -180,7 +180,7 @@ def triple_quoted_docstring(content: str, indentation: str | None = None) -> str
     quote = possible_quotes[0]
 
     # Escape the final quote, if necessary
-    if quote == escaped_string[-1]:
+    if quote[0] == escaped_string[-1]:
         escaped_string = escaped_string[:-1] + "\\" + escaped_string[-1]
 
     return f"{quote}{escaped_string}{quote}"
@@ -555,10 +555,6 @@ class DocstringAdder(libcst.CSTTransformer):
                     body=[libcst.SimpleStatementLine(body=[docstring_node])],
                     # but preserve `type: ignore` comments
                     header=updated_node.body.trailing_whitespace,
-                )
-            case libcst.IndentedBlock(body=[libcst.Expr(value=libcst.Ellipsis())]):
-                new_body = updated_node.body.with_changes(
-                    body=[libcst.SimpleStatementLine(body=[docstring_node])]
                 )
             case libcst.IndentedBlock():
                 new_body = updated_node.body.with_changes(
@@ -1183,7 +1179,7 @@ def load_blacklist(path: Path) -> frozenset[str]:
     return entries - {""}
 
 
-def _main() -> None:
+def _main(cli_args: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=RawDescriptionRichHelpFormatter
     )
@@ -1225,7 +1221,7 @@ def _main() -> None:
         ),
         default=(),
     )
-    args = parser.parse_args()
+    args = parser.parse_args(cli_args)
 
     stdlib_path = Path(args.stdlib_path) if args.stdlib_path else None
     if stdlib_path is not None and not (

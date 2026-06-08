@@ -57,10 +57,11 @@ dev = [
     "mypy==1.20.2",
     "pytest==9.0.3",
     "ty==0.0.35",
+    "black"
 ]
 
 [tool.mypy]
-files = ['*.py']
+files = ['**/*.py']
 show_traceback = true
 pretty = true
 strict = true
@@ -75,9 +76,6 @@ possibly-unresolved-reference = "error"
 division-by-zero = "error"
 unused-ignore-comment = "error"
 
-[tool.ty.analysis]
-respect-type-ignore-comments = false
-
 [tool.pytest.ini_options]
 addopts = "--strict-config --strict-markers"
 xfail_strict = true
@@ -89,7 +87,7 @@ plugins = ["covdefaults"]
 [tool.coverage.report]
 # This extends the lines that covdefaults already excludes
 exclude_lines = ['^if typing.TYPE_CHECKING:$']
-fail_under = 64
+fail_under = 90
 
 [tool.coverage.covdefaults]
 subtract_omit = "*/__main__.py"
@@ -154,7 +152,7 @@ unfixable = [
 convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["D100"]
+"tests/**" = ["D"]
 
 [tool.ruff.lint.isort]
 combine-as-imports = true
