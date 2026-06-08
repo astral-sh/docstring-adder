@@ -51,7 +51,13 @@ include = ["add_docstrings.py"]
 allow-direct-references = true
 
 [dependency-groups]
-dev = ["mypy==1.20.2", "ty==0.0.35"]
+dev = [
+    "covdefaults==2.3.0",
+    "coverage==7.14.1",
+    "mypy==1.20.2",
+    "pytest==9.0.3",
+    "ty==0.0.35",
+]
 
 [tool.mypy]
 files = ['*.py']
@@ -71,6 +77,22 @@ unused-ignore-comment = "error"
 
 [tool.ty.analysis]
 respect-type-ignore-comments = false
+
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers"
+xfail_strict = true
+
+[tool.coverage.run]
+# Note that many settings are automatically added due to this plugin
+plugins = ["covdefaults"]
+
+[tool.coverage.report]
+# This extends the lines that covdefaults already excludes
+exclude_lines = ['^if typing.TYPE_CHECKING:$']
+fail_under = 64
+
+[tool.coverage.covdefaults]
+subtract_omit = "*/__main__.py"
 
 [tool.ruff]
 fix = true
@@ -130,6 +152,9 @@ unfixable = [
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D100"]
 
 [tool.ruff.lint.isort]
 combine-as-imports = true
