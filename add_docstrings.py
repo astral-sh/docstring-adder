@@ -193,12 +193,14 @@ class TokenIndex:
         self, line: LineNumber, character_column: CharacterColumn
     ) -> TextOffset:
         """Convert a tokenizer row and character column to a source offset."""
+
         if line > len(self.line_starts):
             return TextOffset(len(self.source))
         return TextOffset(self.line_starts[line - 1] + character_column)
 
     def ast_offset(self, line: LineNumber, byte_column: ByteColumn) -> TextOffset:
         """Convert an AST row and UTF-8 byte column to a source offset."""
+
         source_line = self.lines[line - 1]
         character_column = len(
             source_line.encode("utf-8")[:byte_column].decode("utf-8")
@@ -207,6 +209,7 @@ class TokenIndex:
 
     def first_token(self, node: ast.stmt) -> Token:
         """Return the first coding token belonging to a statement."""
+
         first_node = (
             node.decorator_list[0]
             if isinstance(node, Documentable) and node.decorator_list
@@ -230,6 +233,7 @@ class TokenIndex:
 
     def last_token(self, node: ast.stmt) -> Token:
         """Return the last coding token belonging to a statement."""
+
         end_line = node.end_lineno
         end_column = node.end_col_offset
         if end_line is None or end_column is None:
@@ -435,8 +439,8 @@ class SourceEditor:
 
     def render(self) -> str:
         """Apply the planned source edits."""
-        edits = sorted(self.edits, key=attrgetter("start", "end"))
 
+        edits = sorted(self.edits, key=attrgetter("start", "end"))
         rendered: list[str] = []
         source_position = TextOffset(0)
         previous_edit: SourceEdit | None = None
@@ -528,6 +532,7 @@ class DocstringAdder:
 
     def transform(self) -> str:
         """Plan all docstring edits and return the transformed source."""
+
         for statement in self.parsed_module.body:
             self.visit_statement(statement, reachable=True)
         self._plan_attribute_docstrings(self.parsed_module.body, indentation=0)
@@ -586,6 +591,7 @@ class DocstringAdder:
 
     def visit_statement(self, node: ast.stmt, *, reachable: bool) -> None:
         """Visit a statement and recursively visit any suites it contains."""
+
         match node:
             case ast.ClassDef():
                 self.visit_class(node, reachable=reachable)
@@ -631,6 +637,7 @@ class DocstringAdder:
         self, node: ast.FunctionDef | ast.AsyncFunctionDef, *, reachable: bool
     ) -> None:
         """Visit a function definition and attempt to add its runtime docstring."""
+
         self.visit_suite(node.body, reachable=reachable)
 
         # If there are multiple functions with the same name in an indented block,
@@ -711,6 +718,7 @@ class DocstringAdder:
         self, node: Documentable, *, runtime_object: RuntimeValue, reachable: bool
     ) -> None:
         """Attempt to add a docstring to a class or function definition."""
+
         if not reachable:
             return
 
@@ -745,6 +753,7 @@ class DocstringAdder:
 
     def _plan_definition_docstring(self, node: Documentable, docstring: str) -> None:
         """Plan the source edit that inserts a class or function docstring."""
+
         first_body_token = self.token_index.first_token(node.body[0])
         suite_colon = self._previous_token_with_string(first_body_token, ":")
         header_newline = self._next_token_of_kind(suite_colon, TokenKind(token.NEWLINE))
@@ -943,6 +952,7 @@ class DocstringAdder:
         self, statement: ast.stmt, next_statement: ast.stmt | None
     ) -> None:
         """Plan a blank line after an added docstring when one is not already present."""
+
         if next_statement is None:
             return
 
@@ -962,6 +972,7 @@ class DocstringAdder:
 
     def _runtime_parent_is_named_tuple(self) -> bool:
         """Return whether the current runtime parent is a NamedTuple-like class."""
+
         runtime_parent = self.runtime_parents[-1].value.inner
         return (
             isinstance(runtime_parent, type)
