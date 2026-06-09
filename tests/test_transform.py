@@ -252,6 +252,22 @@ def test_semicolon_delimited_statements_are_rejected() -> None:
         transform("x: int; y: int\n", runtime_module())
 
 
+def test_parenthesized_decorators_are_rejected() -> None:
+    source = textwrap.dedent(
+        """\
+        class C:
+            @(
+                staticmethod
+            )
+            def method(): ...
+        """
+    )
+    with pytest.raises(
+        NotImplementedError, match="Parenthesized decorators are not supported"
+    ):
+        transform(source, runtime_module())
+
+
 def test_block_body_preserves_comments_and_ellipsis() -> None:
     """Block comments and the existing multiline ellipsis remain untouched."""
     source = textwrap.dedent(

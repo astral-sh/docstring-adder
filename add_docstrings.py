@@ -265,11 +265,9 @@ class TokenIndex:
         token = self.tokens_by_start[first_node_start_offset]
 
         # A decorator expression starts after its leading `@` token.
-        if (
-            first_node is not node
-            and token.prior_token is not None
-            and token.prior_token.string == "@"
-        ):
+        if first_node is not node:
+            if token.prior_token is None or token.prior_token.string != "@":
+                raise NotImplementedError("Parenthesized decorators are not supported")
             token = token.prior_token
 
         return token
