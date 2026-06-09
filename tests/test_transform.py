@@ -340,7 +340,7 @@ def test_logical_module_name_is_used_for_blacklist() -> None:
 
 
 def test_missing_runtime_class_is_unchanged() -> None:
-    """No docstrings are retrieved through the missing-runtime sentinel."""
+    """A class absent at runtime is left unchanged."""
     source = textwrap.dedent(
         """\
         class Missing:

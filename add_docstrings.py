@@ -382,10 +382,6 @@ class RuntimeValue:
 
     inner: object
 
-    def is_not_found(self) -> bool:
-        """Return `True` if the runtime object could not be found."""
-        return self.inner is NOT_FOUND
-
 
 @dataclass
 class RuntimeParent:
@@ -613,25 +609,21 @@ class DocstringAdder:
         visited.
         """
         runtime_parent = self.runtime_parents[-1]
-        runtime_object: RuntimeValue | None
-        if runtime_parent.value.is_not_found():
-            runtime_object = RuntimeValue(NOT_FOUND)
-        else:
-            runtime_object = get_runtime_object_for_stub(
-                name=self.maybe_mangled_name(node.name), runtime_parent=runtime_parent
-            )
-            if runtime_object is None:
-                self._log_runtime_object_not_found(node.name, reachable=reachable)
-                runtime_object = RuntimeValue(NOT_FOUND)
+        runtime_object = get_runtime_object_for_stub(
+            name=self.maybe_mangled_name(node.name), runtime_parent=runtime_parent
+        )
+        if runtime_object is None:
+            self._log_runtime_object_not_found(node.name, reachable=reachable)
+            return
+
         self.runtime_parents.append(RuntimeParent(node.name, runtime_object))
 
         self.visit_suite(node.body, reachable=reachable)
 
-        runtime_class = self.runtime_parents.pop().value
-        if not runtime_class.is_not_found():
-            self._document_class_or_function(
-                node, runtime_object=runtime_class, reachable=reachable
-            )
+        self.runtime_parents.pop()
+        self._document_class_or_function(
+            node, runtime_object=runtime_object, reachable=reachable
+        )
 
     def visit_function(
         self, node: ast.FunctionDef | ast.AsyncFunctionDef, *, reachable: bool
@@ -648,9 +640,6 @@ class DocstringAdder:
         self.suite_visitation_stack[-1].add(node.name)
 
         runtime_parent = self.runtime_parents[-1]
-
-        if runtime_parent.value.is_not_found():
-            return
 
         runtime_object = get_runtime_object_for_stub(
             name=self.maybe_mangled_name(node.name), runtime_parent=runtime_parent
@@ -707,11 +696,7 @@ class DocstringAdder:
             # The generated docstrings for the properties in these classes
             # are always things like "Alias for field number 0", which clutter
             # the stubs and aren't useful.
-            if (
-                reachable
-                and not self.runtime_parents[-1].value.is_not_found()
-                and not self._runtime_parent_is_named_tuple()
-            ):
+            if reachable and not self._runtime_parent_is_named_tuple():
                 self._plan_attribute_docstrings(body, indentation=indentation)
 
     def _document_class_or_function(
@@ -1096,14 +1081,6 @@ def get_runtime_docstring(runtime: RuntimeValue) -> str | None:
         return None
 
     return runtime_docstring
-
-
-class NOT_FOUND:
-    """Sentinel to indicate the runtime object for a stub definition could not be found.
-
-    A custom sentinel is required because `None` might be the corresponding runtime object
-    for many stub definitions.
-    """
 
 
 def get_runtime_object_for_stub(
