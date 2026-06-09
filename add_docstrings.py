@@ -94,7 +94,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import bisect
 import contextlib
 import importlib
 import inspect
@@ -106,13 +105,12 @@ import token
 import tokenize
 import types
 import typing
-from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import chain
 from operator import attrgetter
 from pathlib import Path
-from typing import Any, ClassVar, NewType, TypeAlias, TypeGuard
+from typing import ClassVar, NewType, TypeAlias
 
 import tomli
 import typeshed_client
@@ -127,37 +125,45 @@ def log(*objects: object) -> None:
 
 # Type alias representing a node that could have a docstring added to it.
 Documentable: TypeAlias = ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef
+
 # NewTypes representing distinct integer domains used for source locations.
 TokenKind = NewType("TokenKind", int)
 LineNumber = NewType("LineNumber", int)
 CharacterColumn = NewType("CharacterColumn", int)
 ByteColumn = NewType("ByteColumn", int)
-TokenListIndex = NewType("TokenListIndex", int)
 TextOffset = NewType("TextOffset", int)
 
+# A suite of statements in an AST node
+Suite = NewType("Suite", list[ast.stmt])
 
-@dataclass(frozen=True, slots=True)
+
+@dataclass(slots=True, kw_only=True, eq=False)
 class Token:
     """A token with absolute character offsets into the original source."""
 
     kind: TokenKind
     string: str
     start_line: LineNumber
-    index: TokenListIndex
     startpos: TextOffset
     endpos: TextOffset
+    prior_token: Token | None
+    next_token: Token | None = None
 
 
 class TokenIndex:
     """Map AST source coordinates to stdlib tokens in the original source."""
 
-    _NON_CODING_TOKENS: ClassVar[set[TokenKind]] = {
+    # AST statement ranges exclude comments and the tokens that only mark indentation,
+    # line boundaries, or the end of the input. Keep these tokens in the linked sequence
+    # so source-preserving edits can still inspect them, but skip them when locating a
+    # statement's last token.
+    _IGNORED_TOKEN_KINDS: ClassVar[set[TokenKind]] = {
         TokenKind(token.INDENT),
         TokenKind(token.DEDENT),
         TokenKind(token.NEWLINE),
         TokenKind(token.ENDMARKER),
         TokenKind(token.COMMENT),
-        TokenKind(tokenize.NL),
+        TokenKind(token.NL),
     }
 
     def __init__(self, source: str) -> None:
@@ -181,31 +187,36 @@ class TokenIndex:
         """
 
         token_infos = tokenize.generate_tokens(io.StringIO(source).readline)
-        tokens: list[Token] = []
-        for index, token_info in enumerate(token_infos):
+        tokens_by_start: dict[TextOffset, Token] = {}
+        tokens_by_end: dict[TextOffset, Token] = {}
+        prior_token: Token | None = None
+        for token_info in token_infos:
+            if token_info.string == ";":
+                raise NotImplementedError("Semicolons are not supported")
+
             start_line = LineNumber(token_info.start[0])
             start_column = CharacterColumn(token_info.start[1])
             end_line = LineNumber(token_info.end[0])
             end_column = CharacterColumn(token_info.end[1])
-            tokens.append(
-                Token(
-                    kind=TokenKind(token_info.type),
-                    string=token_info.string,
-                    start_line=start_line,
-                    index=TokenListIndex(index),
-                    startpos=self.source_offset(start_line, start_column),
-                    endpos=self.source_offset(end_line, end_column),
-                )
+            start_pos = self.source_offset(start_line, start_column)
+            end_pos = self.source_offset(end_line, end_column)
+            token = Token(
+                kind=TokenKind(token_info.type),
+                string=token_info.string,
+                start_line=start_line,
+                startpos=start_pos,
+                endpos=end_pos,
+                prior_token=prior_token,
             )
-        self.tokens = tokens
-        """A list of all tokens in the current file."""
+            if prior_token is not None:
+                prior_token.next_token = token
+            tokens_by_start[start_pos] = tokens_by_end[end_pos] = prior_token = token
 
-        self.token_starts = [source_token.startpos for source_token in self.tokens]
-        """A list of the starting offset of each token.
+        self.tokens_by_start = tokens_by_start
+        """Tokens indexed by their starting source offsets."""
 
-        It is an invariant that this list will always be the exact same length as `self.tokens`.
-        It is maintained as a separate list in order to enable fast binary searches.
-        """
+        self.tokens_by_end = tokens_by_end
+        """Tokens indexed by their ending source offsets."""
 
     def source_offset(
         self, line: LineNumber, character_column: CharacterColumn
@@ -239,7 +250,7 @@ class TokenIndex:
         return TextOffset(self.line_starts[line - 1] + character_column)
 
     def first_token(self, node: ast.stmt) -> Token:
-        """Return the first coding token belonging to a statement."""
+        """Return the first token belonging to a statement."""
 
         # A definition's AST coordinates begin at its class/def keyword, but its
         # decorators are part of the source range we need to edit.
@@ -251,50 +262,60 @@ class TokenIndex:
         first_node_start_offset = self.ast_offset(
             LineNumber(first_node.lineno), ByteColumn(first_node.col_offset)
         )
-        # Token starts are sorted, so bisect finds the token at the AST coordinate.
-        first_node_index = bisect.bisect_left(
-            self.token_starts, first_node_start_offset
-        )
+        token = self.tokens_by_start[first_node_start_offset]
 
         # A decorator expression starts after its leading `@` token.
         if (
             first_node is not node
-            and first_node_index > 0
-            and self.tokens[first_node_index - 1].string == "@"
+            and token.prior_token is not None
+            and token.prior_token.string == "@"
         ):
-            first_node_index -= 1
+            token = token.prior_token
 
-        # Indentation, line breaks, and comments do not belong to the coding span.
-        while self.tokens[first_node_index].kind in self._NON_CODING_TOKENS:
-            first_node_index += 1
-        return self.tokens[first_node_index]
+        return token
 
     def last_token(self, node: ast.stmt) -> Token:
-        """Return the last coding token belonging to a statement."""
+        """Return the last token belonging to a statement."""
 
         end_line = node.end_lineno
         end_column = node.end_col_offset
         if end_line is None or end_column is None:
             raise RuntimeError("AST statement is missing end position information")
 
-        end = self.ast_offset(LineNumber(end_line), ByteColumn(end_column))
-        # Start from the final token beginning no later than the AST end position.
-        last_index = bisect.bisect_right(self.token_starts, end) - 1
-        # A token may start before the AST boundary but extend beyond it; non-coding
-        # tokens at the boundary are likewise outside the statement's coding span.
-        while (
-            self.tokens[last_index].endpos > end
-            or self.tokens[last_index].kind in self._NON_CODING_TOKENS
-        ):
-            last_index -= 1
-        return self.tokens[last_index]
+        end_offset = self.ast_offset(LineNumber(end_line), ByteColumn(end_column))
+
+        token = self.tokens_by_end[end_offset]
+        while token.prior_token is not None and token.kind in self._IGNORED_TOKEN_KINDS:
+            token = token.prior_token
+
+        return token
 
 
-def _is_statement_list(value: list[Any]) -> TypeGuard[list[ast.stmt]]:
-    return all(isinstance(item, ast.stmt) for item in value)
+def _previous_token_with_string(start: Token, string: str) -> Token:
+    """Return the nearest preceding token represented using the given string in Python source code."""
+
+    candidate = start.prior_token
+    while candidate is not None:
+        if candidate.string == string:
+            return candidate
+        candidate = candidate.prior_token
+    raise RuntimeError(f"Could not find preceding {string!r} token")
+
+
+def _next_token_of_kind(start: Token, token_kind: TokenKind) -> Token:
+    """Return the nearest following token of the given kind."""
+
+    candidate = start.next_token
+    while candidate is not None:
+        if candidate.kind == token_kind:
+            return candidate
+        candidate = candidate.next_token
+    raise RuntimeError(f"Could not find token kind {token_kind}")
 
 
 def _is_string_statement(node: ast.stmt) -> bool:
+    """Return `True` if `node` is a standalone string-literal expression such as you might find as a docstring."""
+
     match node:
         case ast.Expr(value=ast.Constant(value=str())):
             return True
@@ -319,6 +340,7 @@ def _real_elif_of_if(node: ast.If, token_index: TokenIndex) -> ast.If | None:
 
 def _final_statement_of_if(node: ast.If) -> ast.stmt:
     """Retrieve the final statement of an `if`/`elif`/`else` chain."""
+
     match node.orelse:
         case []:
             return node.body[-1]
@@ -326,28 +348,6 @@ def _final_statement_of_if(node: ast.If) -> ast.stmt:
             return _final_statement_of_if(nested_if)
         case _:
             return node.orelse[-1]
-
-
-def _child_suites(node: ast.AST) -> list[list[ast.stmt]]:
-    """Return direct child suites contained in a non-namespace AST node.
-
-    Some suites are nested inside helper nodes such as `ExceptHandler` and
-    `match_case`, so this descends through non-expression, non-statement container
-    nodes without recursively visiting the statements themselves.
-    """
-    suites: list[list[ast.stmt]] = []
-    for _field_name, value in ast.iter_fields(node):
-        if not isinstance(value, list) or not value:
-            continue
-        if _is_statement_list(value):
-            suites.append(value)
-        else:
-            for item in value:
-                if isinstance(item, ast.AST) and not isinstance(
-                    item, (ast.expr, ast.stmt)
-                ):
-                    suites.extend(_child_suites(item))
-    return suites
 
 
 def triple_quoted_docstring(content: str, indentation: str | None = None) -> str:
@@ -488,7 +488,7 @@ class SourceEditor:
                     f"{previous_edit!r} overlaps {edit!r}. "
                     "This indicates a bug in the source editor."
                 )
-            rendered.extend((self.source[source_position : edit.start], edit.text))
+            rendered += [self.source[source_position : edit.start], edit.text]
             source_position = edit.end
             previous_edit = edit
 
@@ -556,7 +556,7 @@ class DocstringAdder:
         self.default_indent = next(
             (
                 source_token.string
-                for source_token in self.token_index.tokens
+                for source_token in self.token_index.tokens_by_start.values()
                 if source_token.kind == TokenKind(token.INDENT)
             ),
             "    ",
@@ -571,8 +571,8 @@ class DocstringAdder:
         """Plan all docstring edits and return the transformed source."""
 
         for statement in self.parsed_module.body:
-            self.visit_statement(statement, reachable=True)
-        self._plan_attribute_docstrings(self.parsed_module.body, indentation=0)
+            self.visit_statement(statement)
+        self._plan_attribute_docstrings(Suite(self.parsed_module.body), indentation=0)
         return self.editor.render()
 
     def maybe_mangled_name(self, name: str) -> str:
@@ -622,25 +622,29 @@ class DocstringAdder:
         mangled_name = self.maybe_mangled_name(final_part)
         return f"{parent_fullname}.{mangled_name}"
 
-    def _log_runtime_object_not_found(self, name: str, *, reachable: bool) -> None:
-        if reachable:
-            log(f"Could not find {self.object_fullname(name)} at runtime")
+    def _log_runtime_object_not_found(self, name: str) -> None:
+        log(f"Could not find {self.object_fullname(name)} at runtime")
 
-    def visit_statement(self, node: ast.stmt, *, reachable: bool) -> None:
-        """Visit a statement and recursively visit any suites it contains."""
+    def visit_statement(self, node: ast.stmt) -> None:
+        """Visit a statement that can contain documentable definitions."""
 
         match node:
             case ast.ClassDef():
-                self.visit_class(node, reachable=reachable)
+                self.visit_class(node)
             case ast.FunctionDef() | ast.AsyncFunctionDef():
-                self.visit_function(node, reachable=reachable)
+                self.visit_function(node)
             case ast.If():
-                self.visit_if(node, reachable=reachable)
+                self.visit_if(node)
             case _:
-                for child_suite in _child_suites(node):
-                    self.visit_suite(child_suite, reachable=reachable)
+                # statements such as `for`/`while`/`except`/`match` can have
+                # child suites, but these shouldn't appear in well-written stub
+                # files; we don't worry about them here. It would be nice to detect
+                # them and raise an exception, but it's hard to reliably detect
+                # arbitrary child suites without hardcoding a list of "forbidden"
+                # nodes here, which feels silly.
+                pass
 
-    def visit_class(self, node: ast.ClassDef, *, reachable: bool) -> None:
+    def visit_class(self, node: ast.ClassDef) -> None:
         """Visit a class definition and attempt to add its runtime docstring.
 
         The runtime object representing the class is retrieved before the class body is
@@ -654,30 +658,27 @@ class DocstringAdder:
             name=self.maybe_mangled_name(node.name), runtime_parent=runtime_parent
         )
         if runtime_object is None:
-            self._log_runtime_object_not_found(node.name, reachable=reachable)
+            self._log_runtime_object_not_found(node.name)
             return
 
         self.runtime_parents.append(RuntimeParent(node.name, runtime_object))
 
-        self.visit_suite(node.body, reachable=reachable)
+        self.visit_suite(Suite(node.body))
 
         self.runtime_parents.pop()
-        self._document_class_or_function(
-            node, runtime_object=runtime_object, reachable=reachable
-        )
+        self._document_class_or_function(node, runtime_object=runtime_object)
 
-    def visit_function(
-        self, node: ast.FunctionDef | ast.AsyncFunctionDef, *, reachable: bool
-    ) -> None:
+    def visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         """Visit a function definition and attempt to add its runtime docstring."""
 
-        self.visit_suite(node.body, reachable=reachable)
+        self.visit_suite(Suite(node.body))
 
         # If there are multiple functions with the same name in an indented block,
         # it's probably an overloaded function or the `@setter` for a property.
         # Only add a docstring for the first definition.
         if node.name in self.suite_visitation_stack[-1]:
             return
+
         self.suite_visitation_stack[-1].add(node.name)
 
         runtime_parent = self.runtime_parents[-1]
@@ -687,14 +688,12 @@ class DocstringAdder:
         )
 
         if runtime_object is None:
-            self._log_runtime_object_not_found(node.name, reachable=reachable)
+            self._log_runtime_object_not_found(node.name)
             return
 
-        self._document_class_or_function(
-            node, runtime_object=runtime_object, reachable=reachable
-        )
+        self._document_class_or_function(node, runtime_object=runtime_object)
 
-    def visit_if(self, node: ast.If, *, reachable: bool) -> None:
+    def visit_if(self, node: ast.If) -> None:
         """Visit an `if` statement and only document its reachable branch.
 
         The test is evaluated syntactically using `typeshed_client`.
@@ -704,28 +703,33 @@ class DocstringAdder:
         )
         assert isinstance(condition, bool)
 
-        self.visit_suite(node.body, reachable=reachable and condition)
+        if condition:
+            self.visit_suite(Suite(node.body))
+            return
 
         maybe_elif = _real_elif_of_if(node, self.token_index)
 
         if maybe_elif is not None:
-            self.visit_if(maybe_elif, reachable=reachable and not condition)
+            self.visit_if(maybe_elif)
         elif node.orelse:
-            self.visit_suite(node.orelse, reachable=reachable and not condition)
+            self.visit_suite(Suite(node.orelse))
 
-    def visit_suite(self, body: list[ast.stmt], *, reachable: bool) -> None:
+    def visit_suite(self, body: Suite) -> None:
         """Visit the statements in a suite and plan its attribute docstrings.
 
         The stdlib AST represents both inline suites and physical indented suites as
         statement lists. Only physical indented suites receive their own function-name
         set and attribute-docstring pass; inline suites do not.
         """
-        is_indented = self._is_indented_suite(body)
+        first_token = self.token_index.first_token(body[0])
+        suite_colon = _previous_token_with_string(first_token, ":")
+        is_indented = suite_colon.start_line != first_token.start_line
+
         if is_indented:
             self.suite_visitation_stack.append(set())
 
         for statement in body:
-            self.visit_statement(statement, reachable=reachable)
+            self.visit_statement(statement)
 
         if is_indented:
             # Each non-module stack entry is one physical indentation level. This is
@@ -737,16 +741,18 @@ class DocstringAdder:
             # The generated docstrings for the properties in these classes
             # are always things like "Alias for field number 0", which clutter
             # the stubs and aren't useful.
-            if reachable and not self._runtime_parent_is_named_tuple():
+            runtime_parent = self.runtime_parents[-1].value.inner
+            if not (
+                isinstance(runtime_parent, type)
+                and issubclass(runtime_parent, tuple)
+                and hasattr(runtime_parent, "_fields")
+            ):
                 self._plan_attribute_docstrings(body, indentation=indentation)
 
     def _document_class_or_function(
-        self, node: Documentable, *, runtime_object: RuntimeValue, reachable: bool
+        self, node: Documentable, *, runtime_object: RuntimeValue
     ) -> None:
         """Attempt to add a docstring to a class or function definition."""
-
-        if not reachable:
-            return
 
         object_fullname = self.object_fullname(node.name)
         if object_fullname in self.blacklisted_objects:
@@ -781,8 +787,8 @@ class DocstringAdder:
         """Plan the source edit that inserts a class or function docstring."""
 
         first_body_token = self.token_index.first_token(node.body[0])
-        suite_colon = self._previous_token_with_string(first_body_token, ":")
-        header_newline = self._next_token_of_kind(suite_colon, TokenKind(token.NEWLINE))
+        suite_colon = _previous_token_with_string(first_body_token, ":")
+        header_newline = _next_token_of_kind(suite_colon, TokenKind(token.NEWLINE))
         literal = triple_quoted_docstring(docstring)
 
         if first_body_token.start_line == suite_colon.start_line:
@@ -795,7 +801,7 @@ class DocstringAdder:
 
             # but preserve `type: ignore` comments
             trailing_comment = self._trailing_comment(
-                self.token_index.last_token(node.body[0]), header_newline
+                self.token_index.last_token(node.body[0])
             )
             newline = self._newline_text(header_newline)
             child_indent = (
@@ -817,24 +823,16 @@ class DocstringAdder:
             header_newline.endpos, f"{prefix}{body_indent}{literal}{newline}"
         )
 
-    def _plan_attribute_docstrings(
-        self, body: list[ast.stmt], *, indentation: int
-    ) -> None:
+    def _plan_attribute_docstrings(self, body: Suite, *, indentation: int) -> None:
         """Add Sphinx-style 'attribute docstrings' to assignments in a suite.
 
         The suite could be the body of a module, class, function,
         `if` block, `elif` block, or `else` block.
         """
-        # Semicolon-separated statements share a terminal NEWLINE token. Count all
-        # statements by that token's ending character offset so attribute docstrings are
-        # only added to assignments that are the sole statement on their physical line.
-        line_counts = Counter(
-            self._terminal_newline(statement).endpos for statement in body
-        )
         runtime_parent = self.runtime_parents[-1]
 
-        for index, statement in enumerate(body):
-            next_statement = body[index + 1] if index + 1 < len(body) else None
+        for next_index, statement in enumerate(body, start=1):
+            next_statement = body[next_index] if next_index < len(body) else None
 
             if isinstance(statement, ast.If):
                 final_statement = _final_statement_of_if(statement)
@@ -846,11 +844,7 @@ class DocstringAdder:
                     continue
 
             # If it's an assignment that we could potentially add a docstring to,
-            # and it is the only statement on its physical line...
-            statement_newline = self._terminal_newline(statement)
-            if line_counts[statement_newline.endpos] != 1:
-                continue
-            # ... and there is no docstring already present...
+            # and there is no docstring already present...
             if next_statement is not None and _is_string_statement(next_statement):
                 continue
 
@@ -961,6 +955,7 @@ class DocstringAdder:
             else:
                 indentation_string = None
 
+            statement_newline = self._terminal_newline(statement)
             source_indent = self._line_indentation(
                 self.token_index.first_token(statement).startpos
             )
@@ -996,65 +991,46 @@ class DocstringAdder:
                 blank_line_indent + self._newline_text(statement_newline),
             )
 
-    def _runtime_parent_is_named_tuple(self) -> bool:
-        """Return whether the current runtime parent is a NamedTuple-like class."""
-
-        runtime_parent = self.runtime_parents[-1].value.inner
-        return (
-            isinstance(runtime_parent, type)
-            and issubclass(runtime_parent, tuple)
-            and hasattr(runtime_parent, "_fields")
-        )
-
-    def _is_indented_suite(self, body: list[ast.stmt]) -> bool:
-        first_token = self.token_index.first_token(body[0])
-        suite_colon = self._previous_token_with_string(first_token, ":")
-        return suite_colon.start_line != first_token.start_line
-
-    def _previous_token_with_string(self, start: Token, string: str) -> Token:
-        for index in range(start.index - 1, -1, -1):
-            candidate = self.token_index.tokens[index]
-            if candidate.string == string:
-                return candidate
-        raise RuntimeError(f"Could not find preceding {string!r} token")
-
-    def _next_token_of_kind(self, start: Token, token_kind: TokenKind) -> Token:
-        for candidate in self.token_index.tokens[start.index :]:
-            if candidate.kind == token_kind:
-                return candidate
-        raise RuntimeError(f"Could not find token kind {token_kind}")
-
     def _terminal_newline(self, node: ast.stmt) -> Token:
-        return self._next_token_of_kind(
+        """Return the token marking the end of a statement's logical line."""
+
+        return _next_token_of_kind(
             self.token_index.last_token(node), TokenKind(token.NEWLINE)
         )
 
-    def _trailing_comment(self, last_body_token: Token, newline: Token) -> str:
-        saw_semicolon = False
-        for candidate in self.token_index.tokens[
-            last_body_token.index + 1 : newline.index
-        ]:
-            if candidate.string == ";":
-                saw_semicolon = True
-            if candidate.kind == TokenKind(token.COMMENT):
-                if saw_semicolon:
-                    return self.source[candidate.startpos : candidate.endpos]
-                whitespace_start = candidate.startpos
-                while (
-                    whitespace_start > last_body_token.endpos
-                    and self.source[whitespace_start - 1] in " \t"
-                ):
-                    whitespace_start = TextOffset(whitespace_start - 1)
-                return self.source[whitespace_start : candidate.endpos]
-        return ""
+    def _trailing_comment(self, last_body_token: Token) -> str:
+        """Return a trailing comment with its leading whitespace, or `""` if absent."""
+
+        candidate = last_body_token.next_token
+        if candidate is None or candidate.kind != TokenKind(token.COMMENT):
+            return ""
+
+        whitespace_start = candidate.startpos
+        while (
+            whitespace_start > last_body_token.endpos
+            and self.source[whitespace_start - 1] in " \t"
+        ):
+            whitespace_start = TextOffset(whitespace_start - 1)
+        return self.source[whitespace_start : candidate.endpos]
 
     def _newline_text(self, newline: Token) -> str:
+        """Return the characters to use when inserting a line break.
+
+        When the source file has no trailing line break, the stdlib `tokenize`
+        module emits a `NEWLINE` token whose `string` attribute is empty. In
+        that case, use the newline style inferred from the rest of the source
+        file.
+        """
         return newline.string or self.default_newline
 
     def _line_start(self, position: TextOffset) -> TextOffset:
+        """Return the offset where the line containing a source position starts."""
+
         return TextOffset(self.source.rfind("\n", 0, position) + 1)
 
     def _line_indentation(self, position: TextOffset) -> str:
+        """Return the indentation of the line containing a source position."""
+
         line_start = self._line_start(position)
         indentation_end = line_start
         while (

@@ -247,6 +247,11 @@ def test_inline_ellipsis_preserves_trailing_comment() -> None:
     assert transform(source, runtime_module()) == expected
 
 
+def test_semicolon_delimited_statements_are_rejected() -> None:
+    with pytest.raises(NotImplementedError, match="Semicolons are not supported"):
+        transform("x: int; y: int\n", runtime_module())
+
+
 def test_block_body_preserves_comments_and_ellipsis() -> None:
     """Block comments and the existing multiline ellipsis remain untouched."""
     source = textwrap.dedent(
@@ -297,6 +302,26 @@ def test_nested_method_is_resolved_from_runtime_class() -> None:
         '''\
         class C:
             def method(self):
+                """Method docs."""
+        '''
+    )
+    assert transform(source, runtime_module()) == expected
+
+
+def test_decorated_first_method_in_class_is_documented() -> None:
+    """A decorator is included when locating a suite's first statement."""
+    source = textwrap.dedent(
+        """\
+        class C:
+            @staticmethod
+            def method(): ...
+        """
+    )
+    expected = textwrap.dedent(
+        '''\
+        class C:
+            @staticmethod
+            def method():
                 """Method docs."""
         '''
     )
