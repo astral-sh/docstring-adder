@@ -868,8 +868,7 @@ def test_multiline_attribute_docstring_in_else_if_is_indented() -> None:
 
 def test_non_ascii_prefix_does_not_shift_edits() -> None:
     """AST byte offsets do not corrupt character-based source edits."""
-    # LibCST handles this correctly without special care, but a future AST-based
-    # implementation could confuse UTF-8 byte offsets with string character offsets.
+    # AST columns are UTF-8 byte offsets, while source edits use character offsets.
     source = textwrap.dedent(
         """\
         \N{GREEK SMALL LETTER PI}: int

@@ -110,8 +110,9 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import chain
+from operator import attrgetter
 from pathlib import Path
-from typing import Any, ClassVar, NewType, TypeAlias, TypeGuard, final
+from typing import Any, ClassVar, NewType, TypeAlias, TypeGuard
 
 import tomli
 import typeshed_client
@@ -135,25 +136,13 @@ TokenListIndex = NewType("TokenListIndex", int)
 TextOffset = NewType("TextOffset", int)
 
 
-@dataclass(slots=True)
-class TokenPosition:
-    """A tokenizer line and character-column pair."""
-
-    line_number: LineNumber
-    character_column: CharacterColumn
-
-    def __init__(self, line_number: int, column: int) -> None:
-        self.line_number = LineNumber(line_number)
-        self.character_column = CharacterColumn(column)
-
-
 @dataclass(frozen=True, slots=True)
 class Token:
     """A token with absolute character offsets into the original source."""
 
     kind: TokenKind
     string: str
-    start: TokenPosition
+    start_line: LineNumber
     index: TokenListIndex
     startpos: TextOffset
     endpos: TextOffset
@@ -181,30 +170,32 @@ class TokenIndex:
             if character == "\n"
         )
 
-        token_infos = list(tokenize.generate_tokens(io.StringIO(source).readline))
+        token_infos = tokenize.generate_tokens(io.StringIO(source).readline)
         self.tokens: list[Token] = []
         for index, token_info in enumerate(token_infos):
-            start = TokenPosition(*token_info.start)
-            end = TokenPosition(*token_info.end)
+            start_line = LineNumber(token_info.start[0])
+            start_column = CharacterColumn(token_info.start[1])
+            end_line = LineNumber(token_info.end[0])
+            end_column = CharacterColumn(token_info.end[1])
             self.tokens.append(
                 Token(
                     kind=TokenKind(token_info.type),
                     string=token_info.string,
-                    start=start,
+                    start_line=start_line,
                     index=TokenListIndex(index),
-                    startpos=self.source_offset(start),
-                    endpos=self.source_offset(end),
+                    startpos=self.source_offset(start_line, start_column),
+                    endpos=self.source_offset(end_line, end_column),
                 )
             )
         self.token_starts = [source_token.startpos for source_token in self.tokens]
 
-    def source_offset(self, position: TokenPosition) -> TextOffset:
+    def source_offset(
+        self, line: LineNumber, character_column: CharacterColumn
+    ) -> TextOffset:
         """Convert a tokenizer row and character column to a source offset."""
-        if position.line_number > len(self.line_starts):
+        if line > len(self.line_starts):
             return TextOffset(len(self.source))
-        return TextOffset(
-            self.line_starts[position.line_number - 1] + position.character_column
-        )
+        return TextOffset(self.line_starts[line - 1] + character_column)
 
     def ast_offset(self, line: LineNumber, byte_column: ByteColumn) -> TextOffset:
         """Convert an AST row and UTF-8 byte column to a source offset."""
@@ -216,21 +207,22 @@ class TokenIndex:
 
     def first_token(self, node: ast.stmt) -> Token:
         """Return the first coding token belonging to a statement."""
-        start = self.ast_offset(LineNumber(node.lineno), ByteColumn(node.col_offset))
+        first_node = (
+            node.decorator_list[0]
+            if isinstance(node, Documentable) and node.decorator_list
+            else node
+        )
+        start = self.ast_offset(
+            LineNumber(first_node.lineno), ByteColumn(first_node.col_offset)
+        )
         first_index = bisect.bisect_left(self.token_starts, start)
 
         if (
-            isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.decorator_list
+            first_node is not node
+            and first_index > 0
+            and self.tokens[first_index - 1].string == "@"
         ):
-            first_decorator = node.decorator_list[0]
-            decorator_start = self.ast_offset(
-                LineNumber(first_decorator.lineno),
-                ByteColumn(first_decorator.col_offset),
-            )
-            first_index = bisect.bisect_left(self.token_starts, decorator_start)
-            if first_index > 0 and self.tokens[first_index - 1].string == "@":
-                first_index -= 1
+            first_index -= 1
 
         while self.tokens[first_index].kind in self._NON_CODING_TOKENS:
             first_index += 1
@@ -414,32 +406,16 @@ class RuntimeParent:
     value: RuntimeValue
 
 
-@final
 @dataclass(frozen=True, kw_only=True, slots=True)
-class Insert:
-    """Text to insert at a character offset in the original source."""
+class SourceEdit:
+    """Replacement text for a half-open range.
 
-    offset: TextOffset
-    text: str
-
-
-@final
-@dataclass(frozen=True, kw_only=True, slots=True)
-class Replace:
-    """A replacement of a half-open character range in the original source."""
+    An empty range signifies an insertion.
+    """
 
     start: TextOffset
     end: TextOffset
     text: str
-
-
-SourceEdit: TypeAlias = Insert | Replace
-
-
-def _edit_range(edit: SourceEdit) -> tuple[TextOffset, TextOffset]:
-    if isinstance(edit, Insert):
-        return edit.offset, edit.offset
-    return edit.start, edit.end
 
 
 class SourceEditor:
@@ -451,36 +427,32 @@ class SourceEditor:
 
     def replace(self, start: TextOffset, end: TextOffset, replacement: str) -> None:
         """Replace the half-open source range from start to end."""
-        self.edits.append(Replace(start=start, end=end, text=replacement))
+        self.edits.append(SourceEdit(start=start, end=end, text=replacement))
 
     def insert(self, offset: TextOffset, text: str) -> None:
         """Insert text, preserving call order at a shared text offset."""
-        self.edits.append(Insert(offset=offset, text=text))
+        self.edits.append(SourceEdit(start=offset, end=offset, text=text))
 
     def render(self) -> str:
-        """Apply planned edits from the end of the file backwards."""
-        edits = sorted(self.edits, key=_edit_range)
+        """Apply the planned source edits."""
+        edits = sorted(self.edits, key=attrgetter("start", "end"))
 
+        rendered: list[str] = []
         source_position = TextOffset(0)
         previous_edit: SourceEdit | None = None
         for edit in edits:
-            start, end = _edit_range(edit)
-            if start < source_position:
+            if edit.start < source_position:
                 raise RuntimeError(
                     "docstring-adder planned conflicting source edits; "
                     f"{previous_edit!r} overlaps {edit!r}. "
                     "This indicates a bug in the source editor."
                 )
-            source_position = end
+            rendered.extend((self.source[source_position : edit.start], edit.text))
+            source_position = edit.end
             previous_edit = edit
 
-        rendered = self.source
-        for edit in reversed(edits):
-            if isinstance(edit, Insert):
-                rendered = rendered[: edit.offset] + edit.text + rendered[edit.offset :]
-            else:
-                rendered = rendered[: edit.start] + edit.text + rendered[edit.end :]
-        return rendered
+        rendered.append(self.source[source_position:])
+        return "".join(rendered)
 
 
 class DocstringAdder:
@@ -533,10 +505,6 @@ class DocstringAdder:
         # in the same way.
         self.suite_visitation_stack: list[set[str]] = [set()]
 
-        # The current physical indentation depth. This is used to reproduce the
-        # existing four-spaces-per-level formatting of multiline attribute docstrings.
-        self.block_depth = 0
-
         # Planned source edits are not visible in the AST. Keep track of assignments
         # receiving attribute docstrings so enclosing `if` statements can still apply
         # the correct blank-line rule.
@@ -562,11 +530,7 @@ class DocstringAdder:
         """Plan all docstring edits and return the transformed source."""
         for statement in self.parsed_module.body:
             self.visit_statement(statement, reachable=True)
-        self._plan_attribute_docstrings(
-            self.parsed_module.body,
-            runtime_parent=self.runtime_parents[-1],
-            indentation=0,
-        )
+        self._plan_attribute_docstrings(self.parsed_module.body, indentation=0)
         return self.editor.render()
 
     def maybe_mangled_name(self, name: str) -> str:
@@ -722,14 +686,14 @@ class DocstringAdder:
         is_indented = self._is_indented_suite(body)
         if is_indented:
             self.suite_visitation_stack.append(set())
-            self.block_depth += 1
 
         for statement in body:
             self.visit_statement(statement, reachable=reachable)
 
         if is_indented:
-            indentation = self.block_depth
-            self.block_depth -= 1
+            # Each non-module stack entry is one physical indentation level. This is
+            # used to format multiline attribute docstrings at four spaces per level.
+            indentation = len(self.suite_visitation_stack) - 1
             self.suite_visitation_stack.pop()
 
             # Don't add attribute docstrings to fields in `NamedTuple` classes.
@@ -741,11 +705,7 @@ class DocstringAdder:
                 and not self.runtime_parents[-1].value.is_not_found()
                 and not self._runtime_parent_is_named_tuple()
             ):
-                self._plan_attribute_docstrings(
-                    body,
-                    runtime_parent=self.runtime_parents[-1],
-                    indentation=indentation,
-                )
+                self._plan_attribute_docstrings(body, indentation=indentation)
 
     def _document_class_or_function(
         self, node: Documentable, *, runtime_object: RuntimeValue, reachable: bool
@@ -790,7 +750,7 @@ class DocstringAdder:
         header_newline = self._next_token_of_kind(suite_colon, TokenKind(token.NEWLINE))
         literal = triple_quoted_docstring(docstring)
 
-        if first_body_token.start.line_number == suite_colon.start.line_number:
+        if first_body_token.start_line == suite_colon.start_line:
             # If the body is just a `...`, replace it with just the docstring.
             match node.body:
                 case [ast.Expr(value=ast.Constant(value=types.EllipsisType()))]:
@@ -823,7 +783,7 @@ class DocstringAdder:
         )
 
     def _plan_attribute_docstrings(
-        self, body: list[ast.stmt], *, runtime_parent: RuntimeParent, indentation: int
+        self, body: list[ast.stmt], *, indentation: int
     ) -> None:
         """Add Sphinx-style 'attribute docstrings' to assignments in a suite.
 
@@ -834,8 +794,9 @@ class DocstringAdder:
         # statements by that token's ending character offset so attribute docstrings are
         # only added to assignments that are the sole statement on their physical line.
         line_counts = Counter(
-            TextOffset(self._terminal_newline(statement).endpos) for statement in body
+            self._terminal_newline(statement).endpos for statement in body
         )
+        runtime_parent = self.runtime_parents[-1]
 
         for index, statement in enumerate(body):
             next_statement = body[index + 1] if index + 1 < len(body) else None
@@ -957,7 +918,7 @@ class DocstringAdder:
 
             # If we're visiting an indented block, indent the docstring
             if indentation and "\n" in docstring:
-                indentation_string = " " * indentation * 4
+                indentation_string = "    " * indentation
                 docstring = (
                     textwrap.indent(docstring, prefix=indentation_string)
                     + indentation_string
@@ -992,7 +953,7 @@ class DocstringAdder:
         next_statement_start = self.token_index.first_token(next_statement).startpos
         next_line_start = self._line_start(next_statement_start)
         gap = self.source[statement_newline.endpos : next_line_start]
-        if not any(not line.strip() for line in gap.splitlines()):
+        if all(line.strip() for line in gap.splitlines()):
             blank_line_indent = self._line_indentation(next_statement_start)
             self.editor.insert(
                 statement_newline.endpos,
@@ -1011,7 +972,7 @@ class DocstringAdder:
     def _is_indented_suite(self, body: list[ast.stmt]) -> bool:
         first_token = self.token_index.first_token(body[0])
         suite_colon = self._previous_token_with_string(first_token, ":")
-        return bool(suite_colon.start.line_number != first_token.start.line_number)
+        return suite_colon.start_line != first_token.start_line
 
     def _previous_token_with_string(self, start: Token, string: str) -> Token:
         for index in range(start.index - 1, -1, -1):
