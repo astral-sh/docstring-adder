@@ -866,23 +866,29 @@ def test_multiline_attribute_docstring_in_else_if_is_indented() -> None:
     assert transform(source, module) == expected
 
 
+def test_nonempty_source_without_trailing_newline() -> None:
+    """A synthetic ENDMARKER row maps to the real end of the source."""
+    source = "def f(): ..."
+    expected = 'def f():\n    """Function docs."""'
+    assert transform(source, runtime_module()) == expected
+
+
 def test_non_ascii_prefix_does_not_shift_edits() -> None:
     """AST byte offsets do not corrupt character-based source edits."""
-    # AST columns are UTF-8 byte offsets, while source edits use character offsets.
-    source = textwrap.dedent(
-        """\
-        \N{GREEK SMALL LETTER PI}: int
-        def f(): ...
-        """
-    )
-    expected = textwrap.dedent(
+    module = module_from_source(
         '''\
-        \N{GREEK SMALL LETTER PI}: int
-        def f():
+        def π() -> None:
             """Function docs."""
         '''
     )
-    assert transform(source, runtime_module()) == expected
+    source = "def π(): ...\n"
+    expected = textwrap.dedent(
+        '''\
+        def π():
+            """Function docs."""
+        '''
+    )
+    assert transform(source, module) == expected
 
 
 def test_transform_is_idempotent() -> None:

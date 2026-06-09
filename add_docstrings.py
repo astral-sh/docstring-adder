@@ -162,22 +162,32 @@ class TokenIndex:
 
     def __init__(self, source: str) -> None:
         self.source = source
+        """The original source text."""
+
         self.lines = source.split("\n")
-        self.line_starts = [TextOffset(0)]
-        self.line_starts.extend(
-            TextOffset(index + 1)
-            for index, character in enumerate(source)
-            if character == "\n"
-        )
+        """The source split at newline characters."""
+
+        self.line_starts = [
+            TextOffset(0),
+            *(
+                TextOffset(index)
+                for index, character in enumerate(source, start=1)
+                if character == "\n"
+            ),
+        ]
+        """The character offset where each source line starts.
+
+        Each character offset is relative to the start of the file.
+        """
 
         token_infos = tokenize.generate_tokens(io.StringIO(source).readline)
-        self.tokens: list[Token] = []
+        tokens: list[Token] = []
         for index, token_info in enumerate(token_infos):
             start_line = LineNumber(token_info.start[0])
             start_column = CharacterColumn(token_info.start[1])
             end_line = LineNumber(token_info.end[0])
             end_column = CharacterColumn(token_info.end[1])
-            self.tokens.append(
+            tokens.append(
                 Token(
                     kind=TokenKind(token_info.type),
                     string=token_info.string,
@@ -187,49 +197,77 @@ class TokenIndex:
                     endpos=self.source_offset(end_line, end_column),
                 )
             )
+        self.tokens = tokens
+        """A list of all tokens in the current file."""
+
         self.token_starts = [source_token.startpos for source_token in self.tokens]
+        """A list of the starting offset of each token.
+
+        It is an invariant that this list will always be the exact same length as `self.tokens`.
+        It is maintained as a separate list in order to enable fast binary searches.
+        """
 
     def source_offset(
         self, line: LineNumber, character_column: CharacterColumn
     ) -> TextOffset:
         """Convert a tokenizer row and character column to a source offset."""
 
+        # If the source file is nonempty and does not have a trailing newline,
+        # tokenize reports the end of the file as being one line past the final
+        # line of the file. We handle that edge case here.
         if line > len(self.line_starts):
             return TextOffset(len(self.source))
+
+        # Unlike AST columns (which count UTF-8 bytes), tokenizer columns count
+        # characters. That means it's safe here to add the column to the line's
+        # absolute character offset directly.
         return TextOffset(self.line_starts[line - 1] + character_column)
 
     def ast_offset(self, line: LineNumber, byte_column: ByteColumn) -> TextOffset:
         """Convert an AST row and UTF-8 byte column to a source offset."""
 
         source_line = self.lines[line - 1]
+
+        # Tokenizer columns count characters, but AST columns count UTF-8 bytes. In
+        # `def π(): ...`, the inline body starts at character column 9 but AST byte
+        # column 10 because π occupies two bytes. Decode the prefix to recover the
+        # character column before adding it to the line's absolute offset.
         character_column = len(
             source_line.encode("utf-8")[:byte_column].decode("utf-8")
         )
+
         return TextOffset(self.line_starts[line - 1] + character_column)
 
     def first_token(self, node: ast.stmt) -> Token:
         """Return the first coding token belonging to a statement."""
 
+        # A definition's AST coordinates begin at its class/def keyword, but its
+        # decorators are part of the source range we need to edit.
         first_node = (
             node.decorator_list[0]
             if isinstance(node, Documentable) and node.decorator_list
             else node
         )
-        start = self.ast_offset(
+        first_node_start_offset = self.ast_offset(
             LineNumber(first_node.lineno), ByteColumn(first_node.col_offset)
         )
-        first_index = bisect.bisect_left(self.token_starts, start)
+        # Token starts are sorted, so bisect finds the token at the AST coordinate.
+        first_node_index = bisect.bisect_left(
+            self.token_starts, first_node_start_offset
+        )
 
+        # A decorator expression starts after its leading `@` token.
         if (
             first_node is not node
-            and first_index > 0
-            and self.tokens[first_index - 1].string == "@"
+            and first_node_index > 0
+            and self.tokens[first_node_index - 1].string == "@"
         ):
-            first_index -= 1
+            first_node_index -= 1
 
-        while self.tokens[first_index].kind in self._NON_CODING_TOKENS:
-            first_index += 1
-        return self.tokens[first_index]
+        # Indentation, line breaks, and comments do not belong to the coding span.
+        while self.tokens[first_node_index].kind in self._NON_CODING_TOKENS:
+            first_node_index += 1
+        return self.tokens[first_node_index]
 
     def last_token(self, node: ast.stmt) -> Token:
         """Return the last coding token belonging to a statement."""
@@ -240,7 +278,10 @@ class TokenIndex:
             raise RuntimeError("AST statement is missing end position information")
 
         end = self.ast_offset(LineNumber(end_line), ByteColumn(end_column))
+        # Start from the final token beginning no later than the AST end position.
         last_index = bisect.bisect_right(self.token_starts, end) - 1
+        # A token may start before the AST boundary but extend beyond it; non-coding
+        # tokens at the boundary are likewise outside the statement's coding span.
         while (
             self.tokens[last_index].endpos > end
             or self.tokens[last_index].kind in self._NON_CODING_TOKENS
