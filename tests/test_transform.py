@@ -247,6 +247,27 @@ def test_inline_ellipsis_preserves_trailing_comment() -> None:
     assert transform(source, runtime_module()) == expected
 
 
+def test_semicolon_delimited_statements_are_rejected() -> None:
+    with pytest.raises(NotImplementedError, match="Semicolons are not supported"):
+        transform("x: int; y: int\n", runtime_module())
+
+
+def test_parenthesized_decorators_are_rejected() -> None:
+    source = textwrap.dedent(
+        """\
+        class C:
+            @(
+                staticmethod
+            )
+            def method(): ...
+        """
+    )
+    with pytest.raises(
+        NotImplementedError, match="Parenthesized decorators are not supported"
+    ):
+        transform(source, runtime_module())
+
+
 def test_block_body_preserves_comments_and_ellipsis() -> None:
     """Block comments and the existing multiline ellipsis remain untouched."""
     source = textwrap.dedent(
@@ -303,6 +324,26 @@ def test_nested_method_is_resolved_from_runtime_class() -> None:
     assert transform(source, runtime_module()) == expected
 
 
+def test_decorated_first_method_in_class_is_documented() -> None:
+    """A decorator is included when locating a suite's first statement."""
+    source = textwrap.dedent(
+        """\
+        class C:
+            @staticmethod
+            def method(): ...
+        """
+    )
+    expected = textwrap.dedent(
+        '''\
+        class C:
+            @staticmethod
+            def method():
+                """Method docs."""
+        '''
+    )
+    assert transform(source, runtime_module()) == expected
+
+
 def test_name_mangled_method_is_resolved_from_runtime_class() -> None:
     """Private methods are looked up using their name-mangled runtime name."""
     source = textwrap.dedent(
@@ -340,7 +381,7 @@ def test_logical_module_name_is_used_for_blacklist() -> None:
 
 
 def test_missing_runtime_class_is_unchanged() -> None:
-    """No docstrings are retrieved through the missing-runtime sentinel."""
+    """A class absent at runtime is left unchanged."""
     source = textwrap.dedent(
         """\
         class Missing:
@@ -823,7 +864,8 @@ def test_attribute_docstring_at_end_of_version_guard_is_followed_by_blank_line(
     """A documented version-guard branch remains separated from following APIs."""
     source = textwrap.dedent(version_guard)
     expected = textwrap.dedent(expected)
-    transformed = blacken(transform(source, runtime_module()))
+    with patch.object(sys, "version_info", (3, 14)):
+        transformed = blacken(transform(source, runtime_module()))
     assert transformed == expected
 
 
@@ -865,24 +907,29 @@ def test_multiline_attribute_docstring_in_else_if_is_indented() -> None:
     assert transform(source, module) == expected
 
 
+def test_nonempty_source_without_trailing_newline() -> None:
+    """A synthetic ENDMARKER row maps to the real end of the source."""
+    source = "def f(): ..."
+    expected = 'def f():\n    """Function docs."""'
+    assert transform(source, runtime_module()) == expected
+
+
 def test_non_ascii_prefix_does_not_shift_edits() -> None:
     """AST byte offsets do not corrupt character-based source edits."""
-    # LibCST handles this correctly without special care, but a future AST-based
-    # implementation could confuse UTF-8 byte offsets with string character offsets.
-    source = textwrap.dedent(
-        """\
-        \N{GREEK SMALL LETTER PI}: int
-        def f(): ...
-        """
-    )
-    expected = textwrap.dedent(
+    module = module_from_source(
         '''\
-        \N{GREEK SMALL LETTER PI}: int
-        def f():
+        def π() -> None:
             """Function docs."""
         '''
     )
-    assert transform(source, runtime_module()) == expected
+    source = "def π(): ...\n"
+    expected = textwrap.dedent(
+        '''\
+        def π():
+            """Function docs."""
+        '''
+    )
+    assert transform(source, module) == expected
 
 
 def test_transform_is_idempotent() -> None:
