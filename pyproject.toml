@@ -56,7 +56,6 @@ dev = [
     "coverage==7.14.1",
     "mypy==1.20.2",
     "pytest==9.0.3",
-    "ty==0.0.35",
     "black"
 ]
 
