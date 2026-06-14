@@ -46,20 +46,20 @@
     {
       groupName: "prek dependencies",
       matchManagers: ["pre-commit"],
+      matchPackageNames: ["!astral-sh/ty-pre-commit"],
       description: "Weekly update of prek dependencies",
       schedule: ["before 4am on Monday"],
     },
     {
       groupName: "pyproject.toml dependencies",
       matchManagers: ["pep621"],
-      matchPackageNames: ["!ty"],
       description: "pyproject.toml dependencies",
       schedule: ["before 4am on Monday"],
     },
     {
       groupName: "ty",
-      matchManagers: ["pep621"],
-      matchPackageNames: ["ty"],
+      matchManagers: ["pre-commit"],
+      matchPackageNames: ["astral-sh/ty-pre-commit"],
       description: "ty",
       schedule: ["at any time"],
     },
