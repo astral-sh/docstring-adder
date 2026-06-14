@@ -54,7 +54,7 @@ allow-direct-references = true
 dev = [
     "covdefaults==2.3.0",
     "coverage==7.14.1",
-    "mypy==1.20.2",
+    "mypy==2.1.0",
     "pytest==9.0.3",
     "black"
 ]
