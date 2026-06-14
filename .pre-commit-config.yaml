@@ -23,7 +23,7 @@ repos:
       - id: validate-pyproject
         priority: 0
   - repo: https://github.com/python-jsonschema/check-jsonschema
-    rev: 0.37.2
+    rev: 0.37.3
     hooks:
       - id: check-github-workflows
         priority: 0
@@ -77,14 +77,14 @@ repos:
         exclude_types: ["markdown"]
         priority: 2
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.16
+    rev: v0.15.17
     hooks:
       - id: ruff-check
         priority: 2
       - id: ruff-format
         priority: 3
   - repo: https://github.com/astral-sh/ty-pre-commit
-    rev: v0.0.47
+    rev: v0.0.49
     hooks:
       - id: ty
         priority: 0
