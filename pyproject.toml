@@ -55,7 +55,7 @@ dev = [
     "covdefaults==2.3.0",
     "coverage==7.14.1",
     "mypy==2.1.0",
-    "pytest==9.0.3",
+    "pytest==9.1.0",
     "black"
 ]
 
