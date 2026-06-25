@@ -88,6 +88,11 @@ Some miscellaneous details:
       def foo(x: str) -> int: ...
   ```
 
+- Runtime imports can be redirected with `[tool.docstring-adder.module-overrides]`,
+  which maps a stub module name to a runtime module name, e.g.
+  `"example_package.submodule" = "example_package._runtime"`. Overrides are read from
+  nearby `pyproject.toml` files.
+
 """
 
 from __future__ import annotations
@@ -1163,11 +1168,16 @@ def transform(
     stub_file_path: Path,
     typeshed_client_context: typeshed_client.SearchContext,
     blacklisted_objects: frozenset[str],
+    insert_module_docstring: bool = True,
 ) -> str:
     """Add runtime docstrings to stub source and return the transformed source."""
     parsed_module = ast.parse(source)
 
-    if runtime_module.__doc__ and ast.get_docstring(parsed_module, clean=False) is None:
+    if (
+        insert_module_docstring
+        and runtime_module.__doc__
+        and ast.get_docstring(parsed_module, clean=False) is None
+    ):
         docstring = triple_quoted_docstring(runtime_module.__doc__) + "\n"
         source = docstring + source if source.strip() else docstring
         parsed_module = ast.parse(source)
@@ -1189,20 +1199,26 @@ def add_docstrings_to_stub(
     path: Path,
     context: typeshed_client.SearchContext,
     blacklisted_objects: frozenset[str],
+    *,
+    runtime_module_name: str | None = None,
 ) -> None:
     """Add docstrings to a stub module and all functions/classes in it."""
+    import_target = runtime_module_name or module_name
 
     print(f"Processing {module_name}... ", flush=True)
     try:
         # Redirect stdout when importing modules to avoid noisy output from modules like `this`
         with contextlib.redirect_stdout(io.StringIO()):
-            runtime_module = importlib.import_module(module_name)
+            runtime_module = importlib.import_module(import_target)
     except KeyboardInterrupt:
         raise
     # `importlib.import_module("multiprocessing.popen_fork")` crashes with AttributeError on Windows
     # Trying to import serial.__main__ for typeshed's pyserial package will raise SystemExit
     except BaseException as e:
-        log(f'Could not import {module_name}: {type(e).__name__}: "{e}"')
+        override = (
+            "" if import_target == module_name else f" (override for {module_name})"
+        )
+        log(f'Could not import {import_target}{override}: {type(e).__name__}: "{e}"')
         return
 
     stub_source = path.read_text(encoding="utf-8")
@@ -1214,6 +1230,7 @@ def add_docstrings_to_stub(
             stub_file_path=path,
             typeshed_client_context=context,
             blacklisted_objects=blacklisted_objects,
+            insert_module_docstring=import_target == module_name,
         )
     except SyntaxError as e:
         log(f"Could not parse '{module_name}' at {path}: {e}")
@@ -1440,6 +1457,34 @@ def load_blacklist(path: Path) -> frozenset[str]:
     return entries - {""}
 
 
+def load_module_overrides(path: Path) -> dict[str, str]:
+    """Load `[tool.docstring-adder.module-overrides]` from a TOML file."""
+    data = tomli.loads(path.read_text(encoding="utf-8"))
+    table = data.get("tool", {}).get("docstring-adder", {}).get("module-overrides", {})
+    if not isinstance(table, dict) or not all(
+        isinstance(value, str) for value in table.values()
+    ):
+        raise SystemExit(f"Invalid module override in {path}: expected a string table")
+    return {str(key): value for key, value in table.items()}
+
+
+def discover_module_overrides(package_paths: Sequence[Path]) -> dict[str, str]:
+    """Collect module overrides from nearby `pyproject.toml` files."""
+    overrides: dict[str, str] = {}
+    seen: set[Path] = set()
+    for package_path in package_paths:
+        for candidate in (
+            package_path.parent.parent,
+            package_path.parent,
+            package_path,
+        ):
+            pyproject = (candidate / "pyproject.toml").resolve()
+            if pyproject.is_file() and pyproject not in seen:
+                seen.add(pyproject)
+                overrides.update(load_module_overrides(pyproject))
+    return overrides
+
+
 def _main(cli_args: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=RawDescriptionRichHelpFormatter
@@ -1504,9 +1549,12 @@ def _main(cli_args: list[str] | None = None) -> None:
         typeshed=stdlib_path, search_path=search_paths, version=sys.version_info[:2]
     )
 
+    package_module_overrides = discover_module_overrides(all_package_paths)
+
     codemodded_stubs = 0
 
     for module, path in typeshed_client.get_all_stub_files(context):
+        runtime_module_name = None
         if stdlib_path is not None and path.is_relative_to(stdlib_path):
             if any(
                 path.relative_to(stdlib_path).match(pattern)
@@ -1514,12 +1562,16 @@ def _main(cli_args: list[str] | None = None) -> None:
             ):
                 log(f"Skipping {module}: blacklisted module")
                 continue
-            else:
-                add_docstrings_to_stub(module, path, context, stdlib_blacklist)
+            blacklist = stdlib_blacklist
         elif any(path.is_relative_to(p) for p in all_package_paths):
-            add_docstrings_to_stub(module, path, context, combined_blacklist)
+            blacklist = combined_blacklist
+            runtime_module_name = package_module_overrides.get(module)
         else:
             continue
+
+        add_docstrings_to_stub(
+            module, path, context, blacklist, runtime_module_name=runtime_module_name
+        )
         codemodded_stubs += 1
 
     if codemodded_stubs == 0:
