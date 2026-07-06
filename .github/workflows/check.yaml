@@ -31,15 +31,15 @@ jobs:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.15"]
         platform: ["ubuntu-latest", "macos-latest", "windows-latest"]
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           path: docstring-adder
           persist-credentials: false
       - name: Checkout typeshed
         run: git clone --depth=1 https://github.com/python/typeshed.git || git clone --depth=1 https://github.com/python/typeshed.git
-      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+      - uses: astral-sh/setup-uv@d31148d669074a8d0a63714ba94f3201e7020bc3 # v8.3.0
         with:
-          version: "0.11.23"
+          version: "0.11.26"
       - name: Check a basic run doesn't fail
         run: uvx --python=${{ matrix.python-version }} --force-reinstall --from=./docstring-adder add-docstrings --stdlib-path ./typeshed/stdlib
       - name: Check typeshed's mypy_test.py passes
@@ -66,15 +66,15 @@ jobs:
     # Too slow to run on every PR
     if: ${{ github.event_name != 'pull_request' }}
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           path: docstring-adder
           persist-credentials: false
       - name: Checkout typeshed
         run: git clone --depth=1 https://github.com/python/typeshed.git || git clone --depth=1 https://github.com/python/typeshed.git
-      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+      - uses: astral-sh/setup-uv@d31148d669074a8d0a63714ba94f3201e7020bc3 # v8.3.0
         with:
-          version: "0.11.23"
+          version: "0.11.26"
       - name: Check a basic run doesn't fail
         run: uvx --python="${DEFAULT_PYTHON_VERSION}" python ./docstring-adder/.github/scripts/typeshed_third_party.py --typeshed-dir ./typeshed --docstring-adder-dir ./docstring-adder
       - name: Check typeshed's mypy_test.py passes
@@ -88,15 +88,15 @@ jobs:
     name: Check running on pandas-stubs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           path: docstring-adder
           persist-credentials: false
       - name: Checkout typeshed
         run: git clone --depth=1 https://github.com/pandas-dev/pandas-stubs.git || git clone --depth=1 https://github.com/pandas-dev/pandas-stubs.git
-      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+      - uses: astral-sh/setup-uv@d31148d669074a8d0a63714ba94f3201e7020bc3 # v8.3.0
         with:
-          version: "0.11.23"
+          version: "0.11.26"
       - name: Check a basic run doesn't fail
         run: uvx --python="${DEFAULT_PYTHON_VERSION}" --force-reinstall --with=pandas --from=./docstring-adder add-docstrings --packages ./pandas-stubs/pandas-stubs
       - name: Check running it again doesn't produce any changes
@@ -118,12 +118,12 @@ jobs:
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.15"]
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+      - uses: astral-sh/setup-uv@d31148d669074a8d0a63714ba94f3201e7020bc3 # v8.3.0
         with:
-          version: "0.11.23"
+          version: "0.11.26"
       - name: Run tests
         run: |
           uv python pin ${{ matrix.python-version }}
@@ -134,23 +134,23 @@ jobs:
     name: Run mypy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+      - uses: astral-sh/setup-uv@d31148d669074a8d0a63714ba94f3201e7020bc3 # v8.3.0
         with:
-          version: "0.11.23"
+          version: "0.11.26"
       - run: uv run mypy
 
   prek:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+      - uses: astral-sh/setup-uv@d31148d669074a8d0a63714ba94f3201e7020bc3 # v8.3.0
         with:
-          version: "0.11.23"
+          version: "0.11.26"
       - run: uvx prek run --all-files
 
   create-issue-on-failure:
