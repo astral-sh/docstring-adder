@@ -53,9 +53,9 @@ allow-direct-references = true
 [dependency-groups]
 dev = [
     "covdefaults==2.3.0",
-    "coverage==7.14.1",
+    "coverage==7.14.3",
     "mypy==2.1.0",
-    "pytest==9.1.0",
+    "pytest==9.1.1",
     "black"
 ]
 
