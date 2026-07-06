@@ -11,42 +11,45 @@ repos:
       - id: check-hooks-apply
         priority: 0
   - repo: https://github.com/codespell-project/codespell
-    rev: v2.4.2
+    rev: 2ccb47ff45ad361a21071a7eedda4c37e6ae8c5a # frozen: v2.4.2
     hooks:
       - id: codespell
         language: python # means renovate will update the `additional_dependencies` for the hook
-        additional_dependencies: ["tomli"]
+        additional_dependencies: ["tomli==2.4.1"]
         priority: 0
   - repo: https://github.com/abravalheri/validate-pyproject
-    rev: v0.25
+    rev: 4b2e70d08cb2ccd26d1fba73588de41c7a5d50b7 # frozen: v0.25
     hooks:
       - id: validate-pyproject
         priority: 0
   - repo: https://github.com/python-jsonschema/check-jsonschema
-    rev: 0.37.3
+    rev: 5030dca3047414c338091455ac41803200ec1f0f # frozen: 0.37.3
     hooks:
       - id: check-github-workflows
         priority: 0
   # `actionlint` hook, for verifying correct syntax in GitHub Actions workflows.
   - repo: https://github.com/rhysd/actionlint
-    rev: v1.7.12
+    rev: 914e7df21a07ef503a81201c76d2b11c789d3fca # frozen: v1.7.12
     hooks:
       - id: actionlint
         additional_dependencies:
           # actionlint has a shellcheck integration which extracts shell scripts in `run:` steps from GitHub Actions
           # and checks these with shellcheck. This is arguably its most useful feature,
-          # but the integration only works if shellcheck is installed
+          # but the integration only works if shellcheck is installed.
+          #
+          # NOTE: if this is pinned to an exact hash, renovate won't update it as of 2026-07-06;
+          # it will only update the version if the tag is understood as a valid Go version.
           - "github.com/wasilibs/go-shellcheck/cmd/shellcheck@v0.11.1"
         language: golang # means renovate will also update `additional_dependencies`
         priority: 0
   # zizmor detects security vulnerabilities in GitHub Actions workflows.
   - repo: https://github.com/zizmorcore/zizmor-pre-commit
-    rev: v1.26.1
+    rev: e3eebf65325ccc992422292cb7a4baee967cf815 # frozen: v1.26.1
     hooks:
       - id: zizmor
         priority: 0
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v6.0.0
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c # frozen: v6.0.0
     hooks:
       - id: check-yaml
         priority: 0
@@ -64,27 +67,27 @@ repos:
       - id: trailing-whitespace
         priority: 1
   - repo: https://github.com/igorshubovych/markdownlint-cli
-    rev: v0.49.0
+    rev: a4d5d37e66ebcd6b3705204a1d6dbb56dea66338 # frozen: v0.49.0
     hooks:
       - id: markdownlint
         priority: 0
       - id: markdownlint-fix
         priority: 2
   - repo: https://github.com/pre-commit/mirrors-prettier
-    rev: v4.0.0-alpha.8
+    rev: f12edd9c7be1c20cfa42420fd0e6df71e42b51ea # frozen: v4.0.0-alpha.8
     hooks:
       - id: prettier
         exclude_types: ["markdown"]
         priority: 2
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.20
+    rev: c59bba8fb259db0fec2bbb77ad8ba51ea7341b56 # frozen: v0.15.20
     hooks:
       - id: ruff-check
         priority: 2
       - id: ruff-format
         priority: 3
   - repo: https://github.com/astral-sh/ty-pre-commit
-    rev: v0.0.56
+    rev: a6000401e1ca0cf427a8398b42fd636a3a0dcb54 # frozen: v0.0.56
     hooks:
       - id: ty
         priority: 0
