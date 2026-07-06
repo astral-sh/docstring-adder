@@ -39,6 +39,9 @@ repos:
           #
           # NOTE: if this is pinned to an exact hash, renovate won't update it as of 2026-07-06;
           # it will only update the version if the tag is understood as a valid Go version.
+          # Pinning to an exact hash is also less important for a go dependency anyway;
+          # Go has better protections against mutable tags than the Python ecosystem, for example:
+          # https://go.dev/blog/supply-chain
           - "github.com/wasilibs/go-shellcheck/cmd/shellcheck@v0.11.1"
         language: golang # means renovate will also update `additional_dependencies`
         priority: 0
