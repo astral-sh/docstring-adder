@@ -51,14 +51,13 @@ include = ["add_docstrings.py"]
 allow-direct-references = true
 
 [dependency-groups]
-prek = ["prek==0.4.2"]
 dev = [
     "covdefaults==2.3.0",
     "coverage==7.14.3",
     "mypy==2.1.0",
     "pytest==9.1.1",
-    "black",
-    { include-group = "prek" },
+    "prek==0.4.2",
+    "black"
 ]
 
 [tool.mypy]

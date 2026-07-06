@@ -244,9 +244,6 @@ dev = [
     { name = "prek" },
     { name = "pytest" },
 ]
-prek = [
-    { name = "prek" },
-]
 
 [package.metadata]
 requires-dist = [
@@ -267,7 +264,6 @@ dev = [
     { name = "prek", specifier = "==0.4.2" },
     { name = "pytest", specifier = "==9.1.1" },
 ]
-prek = [{ name = "prek", specifier = "==0.4.2" }]
 
 [[package]]
 name = "exceptiongroup"
