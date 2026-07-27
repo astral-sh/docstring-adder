@@ -11,7 +11,7 @@ repos:
       - id: check-hooks-apply
         priority: 0
   - repo: https://github.com/codespell-project/codespell
-    rev: 2ccb47ff45ad361a21071a7eedda4c37e6ae8c5a # frozen: v2.4.2
+    rev: 57b21406f092110c18776e39b0bda50d37c945c8 # frozen: v2.4.3
     hooks:
       - id: codespell
         language: python # means renovate will update the `additional_dependencies` for the hook
@@ -47,7 +47,7 @@ repos:
         priority: 0
   # zizmor detects security vulnerabilities in GitHub Actions workflows.
   - repo: https://github.com/zizmorcore/zizmor-pre-commit
-    rev: e3eebf65325ccc992422292cb7a4baee967cf815 # frozen: v1.26.1
+    rev: 64a97fb7fa63188393d3215c6e312f5f9c6d0f78 # frozen: v1.27.0
     hooks:
       - id: zizmor
         priority: 0
@@ -70,20 +70,20 @@ repos:
       - id: trailing-whitespace
         priority: 1
   - repo: https://github.com/igorshubovych/markdownlint-cli
-    rev: a4d5d37e66ebcd6b3705204a1d6dbb56dea66338 # frozen: v0.49.0
+    rev: 5b5dddc4fb0f83c3ea1fc5616fa63e115dce83e0 # frozen: v0.49.1
     hooks:
       - id: markdownlint
         priority: 0
       - id: markdownlint-fix
         priority: 2
   - repo: https://github.com/rbubley/mirrors-prettier
-    rev: 39e2973981e6d2f9b6c543b0086a2d2393abdc89 # frozen: v3.9.4
+    rev: 9337a74165b178ae2c766f60bee7252a0f06f3e8 # frozen: v3.9.5
     hooks:
       - id: prettier
         exclude_types: ["markdown"]
         priority: 2
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: 01a675ea018f2fb714478a5ffb83fcea8374bb06 # frozen: v0.15.21
+    rev: cb8c523fd4835aba42af70f4cad5568db4df0b6c # frozen: v0.16.0
     hooks:
       - id: ruff-check
         priority: 2
