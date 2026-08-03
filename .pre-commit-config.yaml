@@ -47,7 +47,7 @@ repos:
         priority: 0
   # zizmor detects security vulnerabilities in GitHub Actions workflows.
   - repo: https://github.com/zizmorcore/zizmor-pre-commit
-    rev: 64a97fb7fa63188393d3215c6e312f5f9c6d0f78 # frozen: v1.27.0
+    rev: 067260dc5fe6ea86b7551bfd6f8b3ba4e6c93129 # frozen: v1.28.0
     hooks:
       - id: zizmor
         priority: 0
@@ -77,13 +77,13 @@ repos:
       - id: markdownlint-fix
         priority: 2
   - repo: https://github.com/rbubley/mirrors-prettier
-    rev: 9337a74165b178ae2c766f60bee7252a0f06f3e8 # frozen: v3.9.5
+    rev: 0ee178619d696787ca73d210cc191d720868c631 # frozen: v3.9.6
     hooks:
       - id: prettier
         exclude_types: ["markdown"]
         priority: 2
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: cb8c523fd4835aba42af70f4cad5568db4df0b6c # frozen: v0.16.0
+    rev: 39d9ac5938dadb73df0564a45f163e25ff9fa6e2 # frozen: v0.16.1
     hooks:
       - id: ruff-check
         priority: 2
