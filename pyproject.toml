@@ -157,3 +157,8 @@ convention = "google"
 [tool.ruff.lint.isort]
 combine-as-imports = true
 split-on-trailing-comma = false
+
+[tool.uv]
+no-build = true
+# This dependency is intentionally pinned to a Git revision.
+no-binary-package = ["typeshed-client"]
