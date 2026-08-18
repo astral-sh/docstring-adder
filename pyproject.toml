@@ -160,5 +160,5 @@ split-on-trailing-comma = false
 
 [tool.uv]
 no-build = true
-# This dependency is intentionally pinned to a Git revision.
-no-binary-package = ["typeshed-client"]
+# The project is installed locally, and typeshed-client is pinned to Git.
+no-binary-package = ["docstring-adder", "typeshed-client"]
