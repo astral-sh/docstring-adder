@@ -162,3 +162,16 @@ split-on-trailing-comma = false
 no-build = true
 # The project is installed locally, and typeshed-client is pinned to Git.
 no-binary-package = ["docstring-adder", "typeshed-client"]
+# Pin the isolated build environment for source-build exceptions.
+build-constraint-dependencies = [
+    "editables==0.6",
+    "hatchling==1.32.0",
+    "packaging==26.3",
+    "pathspec==1.1.1",
+    "pluggy==1.6.0",
+    "setuptools==84.0.0",
+    "tomli==2.4.1; python_version < '3.11'",
+    "tomlkit==0.15.1",
+    "trove-classifiers==2026.6.1.19",
+    "wheel==0.47.0",
+]
