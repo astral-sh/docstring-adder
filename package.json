@@ -1,7 +1,0 @@
-{
-  "name": "docstring-adder-dev",
-  "private": true,
-  "devDependencies": {
-    "prettier": "3.9.6"
-  }
-}
