@@ -73,3 +73,6 @@ env/
 
 # mkdocs documentation
 site/
+
+# JavaScript development tools
+/node_modules/

@@ -76,11 +76,15 @@ repos:
         priority: 0
       - id: markdownlint-fix
         priority: 2
-  - repo: https://github.com/rbubley/mirrors-prettier
-    rev: 0ee178619d696787ca73d210cc191d720868c631 # frozen: v3.9.6
+  - repo: local
     hooks:
       - id: prettier
+        name: prettier
+        entry: node scripts/prettier.cjs --write --ignore-unknown --
+        language: system
+        types: [text]
         exclude_types: ["markdown"]
+        require_serial: true
         priority: 2
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: 65dbdb59d2f2d9c3bdc343c566821ad3319ddaa3 # frozen: v0.16.3

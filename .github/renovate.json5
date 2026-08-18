@@ -5,7 +5,7 @@
   extends: ["github>astral-sh/renovate-config"],
   semanticCommits: "disabled",
   separateMajorMinor: false,
-  enabledManagers: ["github-actions", "pre-commit", "pep621"],
+  enabledManagers: ["github-actions", "pre-commit", "pep621", "npm"],
   "pre-commit": {
     enabled: true,
   },
