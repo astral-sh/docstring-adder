@@ -1,6 +1,6 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["flit_core==4.0.2"]
+build-backend = "flit_core.buildapi"
 
 [project]
 name = "docstring-adder"
@@ -44,11 +44,8 @@ classifiers = [
 [project.scripts]
 add-docstrings = "add_docstrings:_main"
 
-[tool.hatch.build.targets.wheel]
-include = ["add_docstrings.py"]
-
-[tool.hatch.metadata]
-allow-direct-references = true
+[tool.flit.module]
+name = "add_docstrings"
 
 [dependency-groups]
 dev = [
@@ -162,3 +159,11 @@ split-on-trailing-comma = false
 no-build = true
 # The project is installed locally, and typeshed-client is pinned to Git.
 no-binary-package = ["docstring-adder", "typeshed-client"]
+# Pin isolated build environments for this project and its Git-pinned dependency.
+build-constraint-dependencies = [
+    "flit-core==4.0.2",
+    # typeshed-client requires setuptools and wheel, which depends on packaging.
+    "packaging==26.3",
+    "setuptools==84.0.0",
+    "wheel==0.47.0",
+]
