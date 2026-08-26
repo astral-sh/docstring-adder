@@ -1,5 +1,5 @@
 [build-system]
-requires = ["flit_core==4.0.2"]
+requires = ["flit_core==3.12.0"]
 build-backend = "flit_core.buildapi"
 
 [project]
@@ -50,7 +50,7 @@ name = "add_docstrings"
 [dependency-groups]
 dev = [
     "covdefaults==2.3.0",
-    "coverage==7.15.3",
+    "coverage==7.15.2",
     "mypy==2.3.0",
     "pytest==9.1.1",
     "prek==0.4.11",
@@ -156,14 +156,22 @@ combine-as-imports = true
 split-on-trailing-comma = false
 
 [tool.uv]
+# Work around Renovate not enforcing its configured cooldown for lockfile-maintenance PRs:
+# https://docs.renovatebot.com/presets-security/#securityminimumreleaseagepypi
+# Enforce the same 30-day cooldown specified in our shared Renovate config:
+# https://github.com/astral-sh/renovate-config/blob/0146d963693a5335c975355d8383fe6933f5dc95/preset.json5#L46
+exclude-newer = "P30D"
+# Exempt Astral's uv package from the cooldown.
+# Temporarily exempt librt until its Python 3.15 wheels clear the cooldown.
+exclude-newer-package = { uv = false, librt = false }
 no-build = true
 # The project is installed locally, and typeshed-client is pinned to Git.
 no-binary-package = ["docstring-adder", "typeshed-client"]
 # Pin isolated build environments for this project and its Git-pinned dependency.
 build-constraint-dependencies = [
-    "flit-core==4.0.2",
+    "flit-core==3.12.0",
     # typeshed-client requires setuptools and wheel, which depends on packaging.
-    "packaging==26.3",
-    "setuptools==84.0.0",
+    "packaging==26.2",
+    "setuptools==83.0.0",
     "wheel==0.47.0",
 ]

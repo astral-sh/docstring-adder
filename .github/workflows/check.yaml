@@ -128,8 +128,8 @@ jobs:
       - name: Run tests
         run: |
           uv python pin ${{ matrix.python-version }}
-          uv run coverage run -m pytest
-          uv run coverage report
+          uv run --locked coverage run -m pytest
+          uv run --locked coverage report
 
   mypy:
     name: Run mypy
@@ -141,7 +141,7 @@ jobs:
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.12.5"
-      - run: uv run mypy
+      - run: uv run --locked mypy
 
   prek:
     runs-on: ubuntu-latest
@@ -152,7 +152,7 @@ jobs:
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.12.5"
-      - run: uv run prek run --all-files
+      - run: uv run --locked prek run --all-files
 
   create-issue-on-failure:
     name: Create an issue if the daily test run failed
