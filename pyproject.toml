@@ -162,7 +162,8 @@ split-on-trailing-comma = false
 # https://github.com/astral-sh/renovate-config/blob/0146d963693a5335c975355d8383fe6933f5dc95/preset.json5#L46
 exclude-newer = "P30D"
 # Exempt Astral's uv package from the cooldown.
-exclude-newer-package = { uv = false }
+# Temporarily exempt librt until its Python 3.15 wheels clear the cooldown.
+exclude-newer-package = { uv = false, librt = false }
 no-build = true
 # The project is installed locally, and typeshed-client is pinned to Git.
 no-binary-package = ["docstring-adder", "typeshed-client"]
