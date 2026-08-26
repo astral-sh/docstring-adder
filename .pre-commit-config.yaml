@@ -89,3 +89,9 @@ repos:
       - id: ty
         args: [--fix]
         priority: 0
+  - repo: https://github.com/astral-sh/uv-pre-commit
+    rev: 856f55170f70dc7523c45a215ecdedc44709e2a6 # frozen: 0.12.6
+    hooks:
+      - id: uv-lock
+        priority: 0
+        args: [--default-index=https://pypi.org/simple, --refresh]
