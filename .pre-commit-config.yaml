@@ -94,4 +94,4 @@ repos:
     hooks:
       - id: uv-lock
         priority: 0
-        args: [--default-index=https://pypi.org/simple, --refresh]
+        args: [--default-index=https://pypi.org/simple, --refresh, --check]
