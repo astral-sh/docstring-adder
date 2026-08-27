@@ -68,10 +68,19 @@ local_partial_types = true
 allow_redefinition = true
 python_version = "3.10"
 
+[tool.ty.analysis]
+strict-literal-narrowing = true
+strict-generic-narrowing = true
+
 [tool.ty.rules]
-possibly-unresolved-reference = "error"
-division-by-zero = "error"
-unused-ignore-comment = "error"
+blanket-ignore-comment = "error"
+dynamic-function-decorator-return = "error"
+missing-type-argument = "error"
+possibly-unresolved-reference = "warn"
+unsound-assignment = "error"
+unsound-return-statement = "error"
+unsound-yield = "error"
+unsupported-dynamic-base = "warn"
 
 [tool.pytest.ini_options]
 addopts = "--strict-config --strict-markers"
@@ -115,34 +124,34 @@ select = [
     "RUF",
     "SIM",
     "UP",
-    "PLW0127",
-    "FURB101",
-    "FURB103",
-    "PLW1510",
+    "self-assigning-variable",
+    "read-whole-file",
+    "write-whole-file",
+    "subprocess-run-without-check",
 ]
 ignore = [
     # Unnecessarily strict/pedantic
-    "D107",
-    "D202",
+    "undocumented-public-init",
+    "blank-line-after-function",
     # These are all enforced by, or incompatible with, the ruff formatter:
-    "E203",
-    "E501",
-    "W291",
-    "W293",
+    "whitespace-before-punctuation",
+    "line-too-long",
+    "trailing-whitespace",
+    "blank-line-with-whitespace",
     # It's often necessary to compare types instead of using isinstance()
-    "E721",
-    "RUF005",
+    "type-comparison",
+    "collection-literal-concatenation",
     # Let mypy/pyright complain about blanket type ignores or implicit optional
-    "PGH003",
-    "RUF013",
+    "blanket-type-ignore",
+    "implicit-optional",
 ]
 unfixable = [
-    "F841",    # unused variable. ruff keeps the call, but mostly we want to get rid of it all
-    "F601",    # automatic fix might obscure issue
-    "F602",    # automatic fix might obscure issue
-    "B018",    # automatic fix might obscure issue
-    "PLW1510", # automatic fix might obscure issue
-    "RUF017",  # Ruff's fix is faster, but I prefer using itertools.chain_from_iterable
+    "unused-variable",                    # unused variable. ruff keeps the call, but mostly we want to get rid of it all
+    "multi-value-repeated-key-literal",   # automatic fix might obscure issue
+    "multi-value-repeated-key-variable",  # automatic fix might obscure issue
+    "useless-expression",                 # automatic fix might obscure issue
+    "subprocess-run-without-check",       # automatic fix might obscure issue
+    "quadratic-list-summation",           # Ruff's fix is faster, but I prefer using itertools.chain_from_iterable
 ]
 
 [tool.ruff.lint.pydocstyle]
