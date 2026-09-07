@@ -11,12 +11,11 @@ exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for 
 exclude-newer-span = "P30D"
 
 [options.exclude-newer-package]
-librt = false
 uv = false
 
 [manifest]
 build-constraints = [
-    { name = "flit-core", specifier = "==3.12.0" },
+    { name = "flit-core", specifier = "==4.0.2" },
     { name = "packaging", specifier = "==26.2" },
     { name = "setuptools", specifier = "==83.0.0" },
     { name = "wheel", specifier = "==0.47.0" },
