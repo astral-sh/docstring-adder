@@ -1,5 +1,5 @@
 [build-system]
-requires = ["flit_core==3.12.0"]
+requires = ["flit_core==4.0.2"]
 build-backend = "flit_core.buildapi"
 
 [project]
@@ -50,10 +50,10 @@ name = "add_docstrings"
 [dependency-groups]
 dev = [
     "covdefaults==2.3.0",
-    "coverage==7.15.2",
+    "coverage==7.15.4",
     "mypy==2.3.0",
     "pytest==9.1.1",
-    "prek==0.4.11",
+    "prek==0.4.12",
     "black"
 ]
 
