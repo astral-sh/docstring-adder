@@ -15,7 +15,6 @@ uv = false
 
 [manifest]
 build-constraints = [
-    { name = "flit-core", specifier = "==4.0.2" },
     { name = "packaging", specifier = "==26.2" },
     { name = "setuptools", specifier = "==83.0.0" },
     { name = "wheel", specifier = "==0.47.0" },
