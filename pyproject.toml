@@ -1,5 +1,5 @@
 [build-system]
-requires = ["flit_core==3.12.0"]
+requires = ["flit_core==4.0.2"]
 build-backend = "flit_core.buildapi"
 
 [project]
@@ -50,11 +50,11 @@ name = "add_docstrings"
 [dependency-groups]
 dev = [
     "covdefaults==2.3.0",
-    "coverage==7.15.2",
+    "coverage==7.15.4",
     "mypy==2.3.0",
     "pytest==9.1.1",
-    "prek==0.4.11",
-    "black"
+    "prek==0.4.12",
+    "black",
 ]
 
 [tool.mypy]
@@ -146,12 +146,12 @@ ignore = [
     "implicit-optional",
 ]
 unfixable = [
-    "unused-variable",                    # unused variable. ruff keeps the call, but mostly we want to get rid of it all
-    "multi-value-repeated-key-literal",   # automatic fix might obscure issue
-    "multi-value-repeated-key-variable",  # automatic fix might obscure issue
-    "useless-expression",                 # automatic fix might obscure issue
-    "subprocess-run-without-check",       # automatic fix might obscure issue
-    "quadratic-list-summation",           # Ruff's fix is faster, but I prefer using itertools.chain_from_iterable
+    "unused-variable",                   # unused variable. ruff keeps the call, but mostly we want to get rid of it all
+    "multi-value-repeated-key-literal",  # automatic fix might obscure issue
+    "multi-value-repeated-key-variable", # automatic fix might obscure issue
+    "useless-expression",                # automatic fix might obscure issue
+    "subprocess-run-without-check",      # automatic fix might obscure issue
+    "quadratic-list-summation",          # Ruff's fix is faster, but I prefer using itertools.chain_from_iterable
 ]
 
 [tool.ruff.lint.pydocstyle]
@@ -171,14 +171,13 @@ split-on-trailing-comma = false
 # https://github.com/astral-sh/renovate-config/blob/0146d963693a5335c975355d8383fe6933f5dc95/preset.json5#L46
 exclude-newer = "P30D"
 # Exempt Astral's uv package from the cooldown.
-# Temporarily exempt librt until its Python 3.15 wheels clear the cooldown.
-exclude-newer-package = { uv = false, librt = false }
+exclude-newer-package = { uv = false }
 no-build = true
 # The project is installed locally, and typeshed-client is pinned to Git.
 no-binary-package = ["docstring-adder", "typeshed-client"]
 # Pin isolated build environments for this project and its Git-pinned dependency.
 build-constraint-dependencies = [
-    "flit-core==3.12.0",
+    "flit-core==4.0.2",
     # typeshed-client requires setuptools and wheel, which depends on packaging.
     "packaging==26.2",
     "setuptools==83.0.0",
