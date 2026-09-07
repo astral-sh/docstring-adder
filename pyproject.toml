@@ -175,9 +175,9 @@ exclude-newer-package = { uv = false }
 no-build = true
 # The project is installed locally, and typeshed-client is pinned to Git.
 no-binary-package = ["docstring-adder", "typeshed-client"]
-# Pin isolated build environments for this project and its Git-pinned dependency.
+# flit-core is pinned in [build-system] above, so it is omitted here.
+# Pin the Git-pinned dependency's isolated build dependencies instead.
 build-constraint-dependencies = [
-    "flit-core==4.0.2",
     # typeshed-client requires setuptools and wheel, which depends on packaging.
     "packaging==26.2",
     "setuptools==83.0.0",
