@@ -380,6 +380,33 @@ def test_logical_module_name_is_used_for_blacklist() -> None:
     assert transformed == source
 
 
+def test_module_docstring_not_inserted_when_suppressed() -> None:
+    """A redirected runtime module does not contribute its module docstring."""
+    module = module_from_source(
+        '''\
+        """Runtime module docs."""
+
+        def f() -> None:
+            """Function docs."""
+        '''
+    )
+    source = "def f(): ...\n"
+    context = typeshed_client.get_search_context(
+        version=sys.version_info[:2], platform=sys.platform
+    )
+    result = add_docstrings.transform(
+        source,
+        module,
+        module_name="logical.submodule",
+        stub_file_path=Path("logical/submodule.pyi"),
+        typeshed_client_context=context,
+        blacklisted_objects=frozenset(),
+        insert_module_docstring=False,
+    )
+    assert '"""Runtime module docs."""' not in result
+    assert '"""Function docs."""' in result
+
+
 def test_missing_runtime_class_is_unchanged() -> None:
     """A class absent at runtime is left unchanged."""
     source = textwrap.dedent(
