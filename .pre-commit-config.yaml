@@ -23,7 +23,7 @@ repos:
       - id: validate-pyproject
         priority: 0
   - repo: https://github.com/python-jsonschema/check-jsonschema
-    rev: 6b63472e72e1a91ed8a2f6d483790dfb644fa1d3 # frozen: 0.37.4
+    rev: 12e63946db2c5cfcc9030fac21c3883ba88c6ed8 # frozen: 0.38.0
     hooks:
       - id: check-github-workflows
         priority: 0
@@ -77,7 +77,7 @@ repos:
       - id: markdownlint-fix
         priority: 2
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: 321478e58f4938179c6b86e4ddfa923d1547a49b # frozen: v0.16.6
+    rev: e8f7d69b957a30acb2c875078d5fd012de24b64c # frozen: v0.16.7
     hooks:
       - id: ruff-check
         priority: 2
@@ -90,7 +90,7 @@ repos:
         args: [--fix]
         priority: 0
   - repo: https://github.com/astral-sh/uv-pre-commit
-    rev: 7720020191168f707a43279c65b6bf9cdf7ed04e # frozen: 0.12.10
+    rev: 4f783b6470be305483837130a5be2e21ed7ff52b # frozen: 0.12.13
     hooks:
       - id: uv-lock
         priority: 0
