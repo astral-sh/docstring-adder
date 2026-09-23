@@ -441,6 +441,7 @@ def test_unreachable_branch_is_not_documented() -> None:
     expected = textwrap.dedent(
         '''\
         import sys
+
         if sys.version_info >= (3, 0):
             def f():
                 """Function docs."""
@@ -749,6 +750,7 @@ def test_reachable_elif_is_documented() -> None:
     expected = textwrap.dedent(
         '''\
         import sys
+
         if sys.version_info < (3, 0):
             def g(): ...
         elif sys.version_info >= (3, 0):
@@ -774,6 +776,7 @@ def test_reachable_else_if_is_documented() -> None:
     expected = textwrap.dedent(
         '''\
         import sys
+
         if sys.version_info < (3, 0):
             def g(): ...
         else:
@@ -783,6 +786,33 @@ def test_reachable_else_if_is_documented() -> None:
         '''
     )
     assert transform(source, runtime_module()) == expected
+
+
+def test_blank_line_is_inserted_before_if() -> None:
+    """Nested `if` statements and their comments are separated from prior code."""
+    source = textwrap.dedent(
+        """\
+        import sys
+        if sys.version_info >= (3, 0):
+            x: int
+            # Version-specific APIs.
+            if sys.version_info >= (3, 0):
+                y: int
+        """
+    )
+    expected = textwrap.dedent(
+        """\
+        import sys
+
+        if sys.version_info >= (3, 0):
+            x: int
+
+            # Version-specific APIs.
+            if sys.version_info >= (3, 0):
+                y: int
+        """
+    )
+    assert blacken(transform(source, types.ModuleType("test_module"))) == expected
 
 
 @pytest.mark.parametrize(
@@ -894,6 +924,7 @@ def test_multiline_attribute_docstring_in_else_if_is_indented() -> None:
     expected = textwrap.dedent(
         '''\
         import sys
+
         if sys.version_info < (3, 0):
             pass
         else:

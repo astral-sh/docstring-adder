@@ -107,7 +107,7 @@ import types
 import typing
 from collections.abc import Sequence
 from dataclasses import dataclass
-from itertools import chain
+from itertools import chain, zip_longest
 from operator import attrgetter
 from pathlib import Path
 from typing import ClassVar, NewType, TypeAlias
@@ -570,7 +570,9 @@ class DocstringAdder:
 
         for statement in self.parsed_module.body:
             self.visit_statement(statement)
-        self._plan_attribute_docstrings(Suite(self.parsed_module.body), indentation=0)
+        self._plan_suite_edits(
+            Suite(self.parsed_module.body), indentation=0, add_attribute_docstrings=True
+        )
         return self.editor.render()
 
     def maybe_mangled_name(self, name: str) -> str:
@@ -717,7 +719,7 @@ class DocstringAdder:
 
         The stdlib AST represents both inline suites and physical indented suites as
         statement lists. Only physical indented suites receive their own function-name
-        set and attribute-docstring pass; inline suites do not.
+        set and source-edit pass; inline suites do not.
         """
         first_token = self.token_index.first_token(body[0])
         suite_colon = _previous_token_with_string(first_token, ":")
@@ -740,12 +742,16 @@ class DocstringAdder:
             # are always things like "Alias for field number 0", which clutter
             # the stubs and aren't useful.
             runtime_parent = self.runtime_parents[-1].value.inner
-            if not (
+            is_named_tuple = (
                 isinstance(runtime_parent, type)
                 and issubclass(runtime_parent, tuple)
                 and hasattr(runtime_parent, "_fields")
-            ):
-                self._plan_attribute_docstrings(body, indentation=indentation)
+            )
+            self._plan_suite_edits(
+                body,
+                indentation=indentation,
+                add_attribute_docstrings=not is_named_tuple,
+            )
 
     def _document_class_or_function(
         self, node: Documentable, *, runtime_object: RuntimeValue
@@ -821,16 +827,24 @@ class DocstringAdder:
             header_newline.endpos, f"{prefix}{body_indent}{literal}{newline}"
         )
 
-    def _plan_attribute_docstrings(self, body: Suite, *, indentation: int) -> None:
-        """Add Sphinx-style 'attribute docstrings' to assignments in a suite.
+    def _plan_suite_edits(
+        self, body: Suite, *, indentation: int, add_attribute_docstrings: bool
+    ) -> None:
+        """Plan attribute docstrings and inter-statement spacing in a suite.
 
         The suite could be the body of a module, class, function,
         `if` block, `elif` block, or `else` block.
         """
         runtime_parent = self.runtime_parents[-1]
 
-        for next_index, statement in enumerate(body, start=1):
-            next_statement = body[next_index] if next_index < len(body) else None
+        for index, (statement, next_statement) in enumerate(
+            zip_longest(body, body[1:])
+        ):
+            if index and isinstance(statement, ast.If):
+                self._ensure_blank_line_before_next(body[index - 1], statement)
+
+            if not add_attribute_docstrings:
+                continue
 
             if isinstance(statement, ast.If):
                 final_statement = _final_statement_of_if(statement)
@@ -965,19 +979,19 @@ class DocstringAdder:
                 f"{prefix}{source_indent}{literal}{statement_newline.string}",
             )
             self.attribute_documented.add(statement)
+            # If we just added a docstring to the previous statement,
+            # add a blank line before this statement.
+            # Black will not do this for us.
             self._ensure_blank_line_before_next(statement, next_statement)
 
     def _ensure_blank_line_before_next(
         self, statement: ast.stmt, next_statement: ast.stmt | None
     ) -> None:
-        """Plan a blank line after an added docstring when one is not already present."""
+        """Plan a blank line between two statements when one is not already present."""
 
         if next_statement is None:
             return
 
-        # If we just added a docstring to the previous statement,
-        # add a blank line before this statement.
-        # Black will not do this for us.
         statement_newline = self._terminal_newline(statement)
         next_statement_start = self.token_index.first_token(next_statement).startpos
         next_line_start = self._line_start(next_statement_start)
