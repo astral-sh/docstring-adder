@@ -37,7 +37,7 @@ jobs:
           persist-credentials: false
       - name: Checkout typeshed
         run: git clone --depth=1 https://github.com/python/typeshed.git || git clone --depth=1 https://github.com/python/typeshed.git
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.12.13"
       - name: Check a basic run doesn't fail
@@ -72,7 +72,7 @@ jobs:
           persist-credentials: false
       - name: Checkout typeshed
         run: git clone --depth=1 https://github.com/python/typeshed.git || git clone --depth=1 https://github.com/python/typeshed.git
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.12.13"
       - name: Check a basic run doesn't fail
@@ -94,7 +94,7 @@ jobs:
           persist-credentials: false
       - name: Checkout typeshed
         run: git clone --depth=1 https://github.com/pandas-dev/pandas-stubs.git || git clone --depth=1 https://github.com/pandas-dev/pandas-stubs.git
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.12.13"
       - name: Check a basic run doesn't fail
@@ -121,7 +121,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.12.13"
       - name: Run tests
@@ -137,7 +137,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.12.13"
       - run: uv run --locked mypy
@@ -148,7 +148,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.12.13"
       - run: uv run --locked prek run --all-files
