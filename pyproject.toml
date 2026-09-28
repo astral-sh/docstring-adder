@@ -50,10 +50,10 @@ name = "add_docstrings"
 [dependency-groups]
 dev = [
     "covdefaults==2.3.0",
-    "coverage==7.15.4",
+    "coverage==7.16.0",
     "mypy==2.3.1",
     "pytest==9.1.1",
-    "prek==0.4.14",
+    "prek==0.5.0",
     "black",
 ]
 
