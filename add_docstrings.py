@@ -110,7 +110,7 @@ from dataclasses import dataclass
 from itertools import chain
 from operator import attrgetter
 from pathlib import Path
-from typing import ClassVar, NewType, TypeAlias
+from typing import ClassVar, Final, NewType, TypeAlias
 
 import tomli
 import typeshed_client
@@ -492,6 +492,13 @@ class SourceEditor:
 
         rendered.append(self.source[source_position:])
         return "".join(rendered)
+
+
+SUBSCRIPTS_WITH_USEFUL_DOCSTRINGS: Final = frozenset({
+    "typing.Generic",
+    "typing.Protocol",
+    "typing_extensions.Protocol",
+})
 
 
 class DocstringAdder:
@@ -901,13 +908,13 @@ class DocstringAdder:
                 # Also, don't add docstrings to things that look like `x: Callable[..., Foo]`
                 # if the runtime value is a function.
                 #
-                # ... But exclude `typing.Generic` here.
-                # It's annotated with `Generic: type[_Generic]` in typeshed,
-                # at least currently, and that's an *extremely* useful docstring :-(
+                # ... But exclude `typing.Generic`/`typing.Protocol`/`typing_extensions.Protocol`
+                # here. `Generic`, for example, is annotated with `Generic: type[_Generic]` in
+                # typeshed, at least currently, and that's an *extremely* useful docstring :-(
                 if (
                     isinstance(runtime_value.inner, (type, types.FunctionType))
                     and isinstance(assignment.annotation, ast.Subscript)
-                    and runtime_fullname != "typing.Generic"
+                    and runtime_fullname not in SUBSCRIPTS_WITH_USEFUL_DOCSTRINGS
                 ):
                     continue
 
