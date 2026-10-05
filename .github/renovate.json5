@@ -51,8 +51,10 @@
       schedule: ["before 4am on Monday"],
     },
     {
+      groupName: "uv",
       matchManagers: ["custom.regex", "pre-commit"],
       matchPackageNames: ["astral-sh/uv", "astral-sh/uv-pre-commit"],
+      description: "Weekly updates of uv and uv-pre-commit",
       schedule: ["before 4am on Monday"],
     },
     {
