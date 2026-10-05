@@ -46,8 +46,13 @@
     {
       groupName: "prek dependencies",
       matchManagers: ["pre-commit"],
-      matchPackageNames: ["!astral-sh/ty-pre-commit"],
+      matchPackageNames: ["!astral-sh/ty-pre-commit", "!astral-sh/uv-pre-commit"],
       description: "Weekly update of prek dependencies",
+      schedule: ["before 4am on Monday"],
+    },
+    {
+      matchManagers: ["custom.regex", "pre-commit"],
+      matchPackageNames: ["astral-sh/uv", "astral-sh/uv-pre-commit"],
       schedule: ["before 4am on Monday"],
     },
     {
