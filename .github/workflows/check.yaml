@@ -40,7 +40,7 @@ jobs:
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.12.13"
+          version: "0.12.23"
       - name: Check a basic run doesn't fail
         run: uvx --python=${{ matrix.python-version }} --force-reinstall --from=./docstring-adder add-docstrings --stdlib-path ./typeshed/stdlib
       - name: Check typeshed's mypy_test.py passes
@@ -76,7 +76,7 @@ jobs:
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.12.13"
+          version: "0.12.23"
       - name: Check a basic run doesn't fail
         run: uvx --python="${DEFAULT_PYTHON_VERSION}" python ./docstring-adder/.github/scripts/typeshed_third_party.py --typeshed-dir ./typeshed --docstring-adder-dir ./docstring-adder
       - name: Check typeshed's mypy_test.py passes
@@ -99,7 +99,7 @@ jobs:
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.12.13"
+          version: "0.12.23"
       - name: Check a basic run doesn't fail
         run: uvx --python="${DEFAULT_PYTHON_VERSION}" --force-reinstall --with=pandas --from=./docstring-adder add-docstrings --packages ./pandas-stubs/pandas-stubs
       - name: Check running it again doesn't produce any changes
@@ -127,7 +127,7 @@ jobs:
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.12.13"
+          version: "0.12.23"
       - name: Run tests
         run: |
           uv python pin ${{ matrix.python-version }}
@@ -144,7 +144,7 @@ jobs:
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.12.13"
+          version: "0.12.23"
       - run: uv run --locked mypy
 
   prek:
@@ -156,7 +156,7 @@ jobs:
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.12.13"
+          version: "0.12.23"
       - run: uv run --locked prek run --all-files
 
   create-issue-on-failure:
