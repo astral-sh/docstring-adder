@@ -29,6 +29,134 @@ def test_load_blacklist_ignores_comments_and_blank_lines(tmp_path: Path) -> None
     })
 
 
+def test_load_module_overrides_parses_table(tmp_path: Path) -> None:
+    """A module-overrides table maps stub module names to runtime modules."""
+
+    config = tmp_path / "pyproject.toml"
+    config.write_text(
+        "[tool.docstring-adder.module-overrides]\n"
+        '"example_package.submodule" = "example_package._runtime"\n'
+        '"example_package.other_submodule" = "example_package._runtime"\n',
+        encoding="utf-8",
+    )
+
+    assert add_docstrings.load_module_overrides(config) == {
+        "example_package.submodule": "example_package._runtime",
+        "example_package.other_submodule": "example_package._runtime",
+    }
+
+
+def test_load_module_overrides_rejects_non_string_value(tmp_path: Path) -> None:
+    """A non-string override value fails loudly rather than being coerced."""
+
+    config = tmp_path / "pyproject.toml"
+    config.write_text(
+        "[tool.docstring-adder.module-overrides]\n"
+        '"example_package.submodule" = ["example_package._runtime"]\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit):
+        add_docstrings.load_module_overrides(config)
+
+
+def test_discover_module_overrides_reads_nearby_pyproject(tmp_path: Path) -> None:
+    """Overrides are auto-discovered from a nearby pyproject.toml."""
+
+    distribution = tmp_path / "python" / "example_package-stubs"
+    package = distribution / "example_package"
+    package.mkdir(parents=True)
+    (tmp_path / "python" / "pyproject.toml").write_text(
+        "[tool.docstring-adder.module-overrides]\n"
+        '"example_package.submodule" = "example_package._runtime"\n',
+        encoding="utf-8",
+    )
+
+    assert add_docstrings.discover_module_overrides([package]) == {
+        "example_package.submodule": "example_package._runtime"
+    }
+
+
+def _write_override_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, module_name: str
+) -> None:
+    """Build an importable runtime module with one documented function."""
+
+    (tmp_path / f"{module_name}.py").write_text(
+        'def f() -> None:\n    """Override docs."""\n', encoding="utf-8"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+
+def test_main_applies_module_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An override redirects introspection to a different runtime module."""
+
+    runtime_module = "example_package_runtime"
+    _write_override_target(tmp_path, monkeypatch, runtime_module)
+
+    package = tmp_path / "stubs" / "example_package"
+    package.mkdir(parents=True)
+    stub = package / "submodule.pyi"
+    stub.write_text("def f() -> None: ...\n", encoding="utf-8")
+
+    (package.parent / "pyproject.toml").write_text(
+        "[tool.docstring-adder.module-overrides]\n"
+        f'"example_package.submodule" = "{runtime_module}"\n',
+        encoding="utf-8",
+    )
+
+    args = ["--packages", str(package)]
+    with (
+        patch.object(
+            add_docstrings.typeshed_client,  # type: ignore[attr-defined]
+            "get_all_stub_files",
+            return_value=[("example_package.submodule", stub)],
+        ),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        add_docstrings._main(args)
+
+    assert exc_info.value.code == 0
+    assert '"""Override docs."""' in stub.read_text(encoding="utf-8")
+
+
+def test_main_applies_module_override_to_typeshed_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Overrides are also discovered for --typeshed-packages roots."""
+
+    runtime_module = "example_package_typeshed_runtime"
+    _write_override_target(tmp_path, monkeypatch, runtime_module)
+
+    package = tmp_path / "typeshed-stubs" / "example_package"
+    package.mkdir(parents=True)
+    stub = package / "submodule.pyi"
+    stub.write_text("def f() -> None: ...\n", encoding="utf-8")
+
+    (package.parent / "pyproject.toml").write_text(
+        "[tool.docstring-adder.module-overrides]\n"
+        f'"example_package.submodule" = "{runtime_module}"\n',
+        encoding="utf-8",
+    )
+
+    args = ["--typeshed-packages", str(package)]
+    with (
+        patch.object(add_docstrings, "install_typeshed_packages"),
+        patch.object(
+            add_docstrings.typeshed_client,  # type: ignore[attr-defined]
+            "get_all_stub_files",
+            return_value=[("example_package.submodule", stub)],
+        ),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        add_docstrings._main(args)
+
+    assert exc_info.value.code == 0
+    assert '"""Override docs."""' in stub.read_text(encoding="utf-8")
+
+
 def test_install_typeshed_packages_rejects_a_directory_without_metadata(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
