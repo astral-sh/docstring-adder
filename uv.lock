@@ -15,9 +15,10 @@ uv = false
 
 [manifest]
 build-constraints = [
-    { name = "packaging", specifier = "==26.2" },
-    { name = "setuptools", specifier = "==83.0.0" },
-    { name = "wheel", specifier = "==0.47.0" },
+    { name = "flit-core", specifier = "==4.0.2", hashes = ["sha256:8d80717e28d982b41594ed5b14d4e89fbc5bad55473fde27994a3101db18a94e", "sha256:b6929defd93884b584d7c87829e0e7b5c26ed6be17b0b873979019314aa841c8"] },
+    { name = "packaging", specifier = "==26.2", hashes = ["sha256:5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e", "sha256:ff452ff5a3e828ce110190feff1178bb1f2ea2281fa2075aadb987c2fb221661"] },
+    { name = "setuptools", specifier = "==83.0.0", hashes = ["sha256:025bccbbf0fa05b6192bc64ae1e7b16e001fd6d6d4d5de03c97b1c1ade523bef", "sha256:29b23c360f22f414dc7336bb39178cc7bcbf6021ed2733cde173f09dba19abb3"] },
+    { name = "wheel", specifier = "==0.47.0", hashes = ["sha256:212281cab4dff978f6cedd499cd893e1f620791ca6ff7107cf270781e587eced", "sha256:cc72bd1009ba0cf63922e28f94d9d83b920aa2bb28f798a31d0691b02fa3c9b3"] },
 ]
 
 [[package]]
