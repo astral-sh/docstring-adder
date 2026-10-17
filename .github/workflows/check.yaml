@@ -54,11 +54,13 @@ jobs:
         shell: bash
         run: |
           cd typeshed
+          uvx black ./stdlib
           git config --global user.email "you@example.com"
           git config --global user.name "Your Name"
           test -n "$(git status --porcelain)"
           git commit -am "."
           uvx --python=${{ matrix.python-version }} --force-reinstall --from=../docstring-adder add-docstrings --stdlib-path ./stdlib
+          uvx black ./stdlib
           test -z "$(git status --porcelain)"
 
   typeshed-third-party:
