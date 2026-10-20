@@ -84,10 +84,7 @@ repos:
       - id: ruff-format
         priority: 3
   - repo: https://github.com/astral-sh/ty-pre-commit
-    # Pin the commit from astral-sh/ty-pre-commit#37 for uv 0.13.4, which
-    # removes the affected eMudhra root. Replace it with a ty-pre-commit
-    # release that includes the trust-store fix.
-    rev: 9a56c13611f728b2a5cfba7bdc19d0ead41684f4
+    rev: 033aa05ea3f6f5f7cd39bcb6a31fd66f6efbed2f # frozen: v0.0.89
     hooks:
       - id: ty
         args: [--fix]
