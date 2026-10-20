@@ -170,7 +170,6 @@ split-on-trailing-comma = false
 # Enforce the same 30-day cooldown specified in our shared Renovate config:
 # https://github.com/astral-sh/renovate-config/blob/0146d963693a5335c975355d8383fe6933f5dc95/preset.json5#L46
 exclude-newer = "P30D"
-# Exempt Astral's uv package from the cooldown.
 exclude-newer-package = { uv = false }
 no-build = true
 require-build-hashes = true
