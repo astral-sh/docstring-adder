@@ -84,7 +84,7 @@ repos:
       - id: ruff-format
         priority: 3
   - repo: https://github.com/astral-sh/ty-pre-commit
-    rev: 70aae47092a06c153286d0ff6c87b282ed865be8 # frozen: v0.0.94
+    rev: 18b2b8bb1b9b90d2d21283756e89b07fc9c747bf # frozen: v0.0.95
     hooks:
       - id: ty
         args: [--fix]
