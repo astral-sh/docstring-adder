@@ -1,126 +1,79 @@
 {
-  $schema: 'https://docs.renovatebot.com/renovate-schema.json',
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
   dependencyDashboard: {
     enabled: true,
   },
-  suppressNotifications: [
-    'prEditedNotification',
-  ],
-  extends: [
-    'github>astral-sh/renovate-config',
-  ],
-  semanticCommits: 'disabled',
+  suppressNotifications: ["prEditedNotification"],
+  extends: ["github>astral-sh/renovate-config"],
+  semanticCommits: "disabled",
   separateMajorMinor: false,
-  enabledManagers: [
-    'github-actions',
-    'pre-commit',
-    'pep621',
-    'custom.regex',
-  ],
-  'pre-commit': {
+  enabledManagers: ["github-actions", "pre-commit", "pep621", "custom.regex"],
+  "pre-commit": {
     enabled: true,
   },
   lockFileMaintenance: {
     enabled: true,
   },
   packageRules: [
+    // Pin GitHub Actions to immutable SHAs.
     {
-      matchDepTypes: [
-        'action',
-      ],
+      matchDepTypes: ["action"],
       pinDigests: true,
-      schedule: [
-        'before 4am on Monday',
-      ],
+      schedule: ["before 4am on Monday"],
+    },
+    // Annotate GitHub Actions SHAs with a SemVer version.
+    {
+      extends: ["helpers:pinGitHubActionDigests"],
+      extractVersion: "^(?<version>v?\\d+\\.\\d+\\.\\d+)$",
+      versioning: "regex:^v?(?<major>\\d+)(\\.(?<minor>\\d+)\\.(?<patch>\\d+))?$",
+      schedule: ["before 4am on Monday"],
     },
     {
-      extends: [
-        'helpers:pinGitHubActionDigests',
-      ],
-      extractVersion: '^(?<version>v?\\d+\\.\\d+\\.\\d+)$',
-      versioning: 'regex:^v?(?<major>\\d+)(\\.(?<minor>\\d+)\\.(?<patch>\\d+))?$',
-      schedule: [
-        'before 4am on Monday',
-      ],
+      groupName: "GitHub Actions dependencies",
+      matchManagers: ["github-actions"],
+      description: "Weekly update of GitHub Action dependencies",
+      schedule: ["before 4am on Monday"],
     },
     {
-      groupName: 'GitHub Actions dependencies',
-      matchManagers: [
-        'github-actions',
-      ],
-      description: 'Weekly update of GitHub Action dependencies',
-      schedule: [
-        'before 4am on Monday',
-      ],
-    },
-    {
-      groupName: 'GitHub runners',
-      matchManagers: [
-        'github-actions',
-      ],
-      matchDatasources: [
-        'github-runners',
-      ],
+      // This package rule disables updates for GitHub runners:
+      // we'd only pin them to a specific version
+      // if there was a deliberate reason to do so
+      groupName: "GitHub runners",
+      matchManagers: ["github-actions"],
+      matchDatasources: ["github-runners"],
       description: "Disable PRs updating GitHub runners (e.g. 'runs-on: macos-14')",
       enabled: false,
-      schedule: [
-        'before 4am on Monday',
-      ],
+      schedule: ["before 4am on Monday"],
     },
     {
-      groupName: 'prek dependencies',
-      matchManagers: [
-        'pre-commit',
-      ],
-      matchPackageNames: [
-        '!astral-sh/ty-pre-commit',
-        '!astral-sh/uv-pre-commit',
-      ],
-      description: 'Weekly update of prek dependencies',
-      schedule: [
-        'before 4am on Monday',
-      ],
+      groupName: "prek dependencies",
+      matchManagers: ["pre-commit"],
+      matchPackageNames: ["!astral-sh/ty-pre-commit", "!astral-sh/uv-pre-commit"],
+      description: "Weekly update of prek dependencies",
+      schedule: ["before 4am on Monday"],
     },
     {
-      groupName: 'uv',
-      matchManagers: [
-        'custom.regex',
-        'pre-commit',
-      ],
-      matchPackageNames: [
-        'astral-sh/uv',
-        'astral-sh/uv-pre-commit',
-      ],
-      description: 'Weekly updates of uv and uv-pre-commit',
-      schedule: [
-        'before 4am on Monday',
-      ],
+      groupName: "uv",
+      matchManagers: ["custom.regex", "pre-commit"],
+      matchPackageNames: ["astral-sh/uv", "astral-sh/uv-pre-commit"],
+      description: "Weekly updates of uv and uv-pre-commit",
+      schedule: ["before 4am on Monday"],
     },
     {
-      groupName: 'pyproject.toml dependencies',
-      matchManagers: [
-        'pep621',
-      ],
-      description: 'pyproject.toml dependencies',
-      schedule: [
-        'before 4am on Monday',
-      ],
+      groupName: "pyproject.toml dependencies",
+      matchManagers: ["pep621"],
+      description: "pyproject.toml dependencies",
+      schedule: ["before 4am on Monday"],
     },
     {
-      groupName: 'ty',
-      matchManagers: [
-        'pre-commit',
-      ],
-      matchPackageNames: [
-        'astral-sh/ty-pre-commit',
-      ],
-      description: 'ty',
-      schedule: [
-        'at any time',
-      ],
+      groupName: "ty",
+      matchManagers: ["pre-commit"],
+      matchPackageNames: ["astral-sh/ty-pre-commit"],
+      description: "ty",
+      schedule: ["at any time"],
     },
   ],
   vulnerabilityAlerts: {
-    commitMessageSuffix: '',
+    commitMessageSuffix: "",
   },
 }
